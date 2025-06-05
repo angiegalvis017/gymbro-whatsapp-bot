@@ -1,0 +1,30 @@
+{
+  "name": "gymbro-whatsapp-bot",
+  "version": "1.0.0",
+  "description": "Bot de WhatsApp para GYMBRO Colombia",
+  "main": "gymbro-bot-completo.js",
+  "scripts": {
+    "start": "node gymbro-bot-completo.js",
+    "dev": "nodemon gymbro-bot-completo.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.0.0",
+    "express": "^4.21.2",
+    "mysql2": "^3.6.0",
+    "venom-bot": "^5.3.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.0"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "keywords": [
+    "whatsapp",
+    "bot",
+    "gymbro",
+    "chatbot"
+  ],
+  "author": "GYMBRO Colombia",
+  "license": "MIT"
+}
