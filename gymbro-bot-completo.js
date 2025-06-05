@@ -255,6 +255,33 @@ async function sendQRCode(client, from, imagePath) {
   }
 }
 
+// NUEVA FUNCIÓN: Configurar timeout automático para asesor Addi
+function setupAsesorTimeout(telefono, client) {
+  // Limpiar timeout anterior si existe
+  if (userStates[telefono] && userStates[telefono].timeoutAsesor) {
+    clearTimeout(userStates[telefono].timeoutAsesor);
+  }
+  
+  // Crear nuevo timeout de 15 minutos
+  userStates[telefono].timeoutAsesor = setTimeout(async () => {
+    try {
+      await safeSendText(client, telefono, 
+        '⏰ Hemos finalizado el chat por inactividad.\n\n' +
+        'Si aún deseas continuar con tu pago por Addi o necesitas ayuda, escribe cualquier mensaje para reiniciar el proceso.\n\n' +
+        '¡Gracias por tu interés en GYMBRO! 💪'
+      );
+      
+      console.log(`⏰ Chat finalizado por timeout de asesor Addi: ${telefono}`);
+      
+      // Limpiar estado del usuario
+      delete userStates[telefono];
+      
+    } catch (error) {
+      console.error('❌ Error en timeout de asesor Addi:', error);
+    }
+  }, 15 * 60 * 1000); // 15 minutos
+}
+
 async function checkInactiveUsers(client) {
   try {
     const dbConnected = await testDatabaseConnection();
@@ -351,6 +378,11 @@ async function cleanupInactiveUsers(client) {
         
         if (sent) {
           console.log(`📤 Mensaje de inactividad enviado a ${phone}`);
+        }
+        
+        // NUEVO: Limpiar timeout de asesor Addi si existe
+        if (userStates[phone].timeoutAsesor) {
+          clearTimeout(userStates[phone].timeoutAsesor);
         }
         
         delete userStates[phone];
@@ -493,11 +525,17 @@ async function initializeBot() {
         
         console.log(`📩 Procesando: "${text}" de ${message._data.notifyName || 'Usuario'}`);
         
-        if (userStates[telefono]?.redirigiendoAsesor) {
-          console.log(`🤖 Mensaje ignorado (en espera de asesor humano).`);
+        // MODIFICADO: Verificar si está siendo redirigido a asesor O esperando asesor Addi
+        if (userStates[telefono]?.redirigiendoAsesor || userStates[telefono]?.esperandoAsesor) {
+          if (userStates[telefono]?.esperandoAsesor) {
+            console.log(`🤖 Usuario esperando asesor Addi - mensaje ignorado.`);
+          } else {
+            console.log(`🤖 Mensaje ignorado (en espera de asesor humano).`);
+          }
           return;
         }
         
+        // NUEVO: Inicializar estado con campos adicionales para Addi
         if (!userStates[telefono]) {
           userStates[telefono] = {
             acceptedTerms: false,
@@ -506,12 +544,65 @@ async function initializeBot() {
             contratarState: 'initial',
             lastInteraction: Date.now(),
             waitingForExperience: false,
-            redirigiendoAsesor: false
+            redirigiendoAsesor: false,
+            esperandoCedula: false,        // NUEVO
+            esperandoAsesor: false,        // NUEVO
+            timeoutAsesor: null            // NUEVO
           };
           console.log('🆕 Nuevo usuario inicializado:', telefono);
         }
         
         userStates[telefono].lastInteraction = Date.now();
+        
+        // NUEVO: Verificar si está esperando cédula para Addi
+        if (userStates[telefono].esperandoCedula) {
+          // Verificar si el mensaje parece una cédula (solo números, 7-10 dígitos)
+          if (/^\d{7,10}$/.test(text)) {
+            console.log(`💳 Cédula recibida para Addi: ${telefono}`);
+            
+            // Marcar estados
+            userStates[telefono].esperandoCedula = false;
+            userStates[telefono].esperandoAsesor = true;
+            
+            // Confirmar recepción y transferir a asesor
+            await safeSendText(client, telefono, 
+              `✅ Perfecto, recibimos tu cédula: ${text}\n\n` +
+              `🔄 Te estamos transfiriendo con uno de nuestros asesores para continuar con tu pago por Addi.\n\n` +
+              `Un asesor humano se comunicará contigo en unos momentos para finalizar tu membresía.\n\n` +
+              `💪 ¡Gracias por elegir GYMBRO!\n\n` +
+              `💡 Tip: Si necesitas cancelar esta espera, escribe "cancelar"`
+            );
+            
+            // Configurar timeout de 15 minutos
+            setupAsesorTimeout(telefono, client);
+            
+            // Guardar en BD que está esperando asesor para Addi
+            setImmediate(async () => {
+              try {
+                const dbConnected = await testDatabaseConnection();
+                if (dbConnected) {
+                  await pool.query(
+                    'INSERT INTO interacciones (telefono, plan_interesado, metodo_pago, cedula_addi, estado_asesor, ultima_interaccion) VALUES (?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE metodo_pago = ?, cedula_addi = ?, estado_asesor = ?, ultima_interaccion = ?',
+                    [telefono, userStates[telefono].selectedPlan || null, 'addi', text, 'esperando_asesor', new Date(), 'addi', text, 'esperando_asesor', new Date()]
+                  );
+                  console.log(`💾 Estado Addi guardado para ${telefono}`);
+                }
+              } catch (dbError) {
+                console.error('❌ Error guardando estado Addi:', dbError);
+              }
+            });
+            
+            return;
+            
+          } else {
+            // No es una cédula válida
+            await safeSendText(client, telefono, 
+              '❌ Por favor envía un número de cédula válido (solo números, entre 7 y 10 dígitos).\n\n' +
+              'Ejemplo: 12345678'
+            );
+            return;
+          }
+        }
         
         // Comandos de prueba y administración
         if (text === 'test') {
@@ -531,6 +622,28 @@ async function initializeBot() {
           console.log('🧪 Comando stats recibido');
           showUserStats();
           await safeSendText(client, telefono, `📊 Usuarios activos: ${Object.keys(userStates).length}`);
+          return;
+        }
+        
+        // NUEVO: Comando para cancelar espera de asesor Addi
+        if (text === 'cancelar' && userStates[telefono].esperandoAsesor) {
+          console.log('🚫 Usuario canceló espera de asesor Addi');
+          
+          // Limpiar timeout
+          if (userStates[telefono].timeoutAsesor) {
+            clearTimeout(userStates[telefono].timeoutAsesor);
+          }
+          
+          // Resetear estados
+          userStates[telefono].esperandoAsesor = false;
+          userStates[telefono].esperandoCedula = false;
+          userStates[telefono].timeoutAsesor = null;
+          userStates[telefono].contratarState = 'initial';
+          
+          await safeSendText(client, telefono, 
+            '✅ Has cancelado la espera del asesor.\n\n' +
+            'Puedes continuar usando el bot normalmente. Escribe "menu" para volver al menú principal.'
+          );
           return;
         }
         
@@ -588,6 +701,11 @@ async function initializeBot() {
               'INSERT INTO interacciones (telefono, plan_interesado, ultima_interaccion) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE plan_interesado = ?, ultima_interaccion = ?',
               [telefono, userStates[telefono].selectedPlan || null, new Date(), userStates[telefono].selectedPlan || null, new Date()]
             );
+          }
+          
+          // Limpiar timeout de Addi si existe
+          if (userStates[telefono].timeoutAsesor) {
+            clearTimeout(userStates[telefono].timeoutAsesor);
           }
           
           delete userStates[telefono];
@@ -972,8 +1090,10 @@ async function initializeBot() {
               }
               await safeSendText(client, telefono, 'Después de realizar tu pago, si eres cliente nuevo, realiza tu inscripción aquí: Registro GYMBRO 👉 https://aplicacion.gymbrocolombia.com/registro/add');
             } else if (metodoPago === 'addi') {
-              await safeSendText(client, telefono, '👉 Para pagar con Addi: requiero tu cédula y te llegará un link a tu celular');
-              await safeSendText(client, telefono, 'Recuerda enviarnos el comprobante después de realizar tu pago. Si eres cliente nuevo, realiza tu inscripción aquí: Registro GYMBRO 👉 https://aplicacion.gymbrocolombia.com/registro/add');
+              // NUEVO FLUJO PARA ADDI: Solicitar cédula y configurar espera de asesor
+              userStates[telefono].esperandoCedula = true;
+              await safeSendText(client, telefono, '👉 Para pagar con Addi: Por favor envíame tu número de cédula');
+              return; // Salir para esperar la cédula
             } else if (metodoPago === 'tarjeta') {
               await safeSendText(client, telefono, `💳 Para pagar con tarjeta, por favor dirígete a la recepción de la sede *${currentLocation}*.`);
             } else if (metodoPago === 'efectivo') {
@@ -1073,18 +1193,20 @@ async function initializeBot() {
           );
         }
         
-        // Guardar interacción en base de datos
-        try {
-          const dbConnected = await testDatabaseConnection();
-          if (dbConnected) {
-            await pool.query(
-              'INSERT INTO interacciones (telefono, plan_interesado, ultima_interaccion) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE plan_interesado = ?, ultima_interaccion = ?',
-              [telefono, userStates[telefono].selectedPlan || null, new Date(), userStates[telefono].selectedPlan || null, new Date()]
-            );
+        // Guardar interacción en base de datos en background
+        setImmediate(async () => {
+          try {
+            const dbConnected = await testDatabaseConnection();
+            if (dbConnected) {
+              await pool.query(
+                'INSERT INTO interacciones (telefono, plan_interesado, ultima_interaccion) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE plan_interesado = ?, ultima_interaccion = ?',
+                [telefono, userStates[telefono] ? userStates[telefono].selectedPlan || null : null, new Date(), userStates[telefono] ? userStates[telefono].selectedPlan || null : null, new Date()]
+              );
+            }
+          } catch (dbError) {
+            console.error('❌ Error guardando en BD (background):', dbError);
           }
-        } catch (dbError) {
-          console.error('❌ Error guardando en BD:', dbError);
-        }
+        });
         
       } catch (error) {
         console.error('❌ Error al procesar mensaje:', error);
@@ -1145,7 +1267,6 @@ async function initializeBot() {
     throw error;
   }
 }
-// ... todo tu código existente ...
 
 // Monitoreo de memoria
 setInterval(() => {
@@ -1161,11 +1282,9 @@ setInterval(() => {
   }
 }, 300000);
 
-// ⬇️ AGREGAR AQUÍ (después del monitoreo de memoria)
 // Evitar que Render "duerma" el servicio
 setInterval(async () => {
   try {
-    // Usar fetch nativo de Node.js 18+
     const response = await fetch('https://gymbro-whatsapp-bot.onrender.com/');
     console.log('🔄 Keep-alive ping successful');
   } catch (error) {
