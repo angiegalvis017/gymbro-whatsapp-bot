@@ -568,7 +568,7 @@ async function initializeBot() {
             await safeSendText(client, telefono, 
               `✅ Perfecto, recibimos tu cédula: ${text}\n\n` +
               `🔄 Te estamos transfiriendo con uno de nuestros asesores para continuar con tu pago por Addi.\n\n` +
-              `Un asesor humano se comunicará contigo en unos momentos para finalizar tu membresía.\n\n` +
+              `Un asesor humano se comunicará contigo en unos momentos para finalizar con la comprade tu membresía.\n\n` +
               `💪 ¡Gracias por elegir GYMBRO!\n\n` +
               `💡 Tip: Si necesitas cancelar esta espera, escribe "cancelar"`
             );
@@ -626,7 +626,7 @@ async function initializeBot() {
         }
         
         // NUEVO: Comando para cancelar espera de asesor Addi
-        if (text === 'cancelar' && userStates[telefono].esperandoAsesor) {
+        if (text === 'cancelar' ) {
           console.log('🚫 Usuario canceló espera de asesor Addi');
           
           // Limpiar timeout
@@ -1088,11 +1088,11 @@ async function initializeBot() {
               } else if (currentLocation === '20 de Julio') {
                 await sendQRCode(client, telefono, './qr_20dejulio.jpg');
               }
-              await safeSendText(client, telefono, 'Después de realizar tu pago, si eres cliente nuevo, realiza tu inscripción aquí: Registro GYMBRO 👉 https://aplicacion.gymbrocolombia.com/registro/add');
+              await safeSendText(client, telefono, 'Después de realizar tu pago, si eres cliente nuevo, realiza tu inscripción gratuita aquí: Registro GYMBRO 👉 https://aplicacion.gymbrocolombia.com/registro/add');
             } else if (metodoPago === 'addi') {
               // NUEVO FLUJO PARA ADDI: Solicitar cédula y configurar espera de asesor
               userStates[telefono].esperandoCedula = true;
-              await safeSendText(client, telefono, '👉 Para pagar con Addi: Por favor envíame tu número de cédula');
+              await safeSendText(client, telefono, '👉 Para pagar con Addi: Por favor envíame tu número de cédula, si eres cliente nuevo, realiza tu inscripción gratiuta aquí: Registro GYMBRO 👉 https://aplicacion.gymbrocolombia.com/registro/add');
               return; // Salir para esperar la cédula
             } else if (metodoPago === 'tarjeta') {
               await safeSendText(client, telefono, `💳 Para pagar con tarjeta, por favor dirígete a la recepción de la sede *${currentLocation}*.`);
@@ -1100,7 +1100,7 @@ async function initializeBot() {
               await safeSendText(client, telefono, `💰 Para pagar en *Efectivo*, por favor dirígete a la recepción de la sede *${currentLocation}*.`);
             } else if (metodoPago === 'pse') {
               await safeSendText(client, telefono, '👉 Sigue este enlace para pagar con PSE: https://checkout.wompi.co/l/VPOS_tTb23T');
-              await safeSendText(client, telefono, 'Recuerda enviarnos el comprobante después de realizar tu pago, si eres cliente nuevo, realiza tu inscripción aquí: Registro GYMBRO 👉 https://aplicacion.gymbrocolombia.com/registro/add');
+              await safeSendText(client, telefono, 'Recuerda enviarnos el comprobante después de realizar tu pago, si eres cliente nuevo, realiza tu inscripción gratuita aquí: Registro GYMBRO 👉 https://aplicacion.gymbrocolombia.com/registro/add');
             }
             
             userStates[telefono].selectedPlan = null;
@@ -1172,7 +1172,7 @@ async function initializeBot() {
         } else if (text.includes('asesor')) {
           userStates[telefono].redirigiendoAsesor = true;
           await safeSendText(client, telefono,
-            '💬 Te estoy redirigiendo a un asesor. Por favor, espera en línea. Un asesor humano continuará la conversación contigo.'
+            '💬 Te estoy redirigiendo a un asesor. Por favor, espera en línea. Un asesor continuará la conversación contigo.'
           );
           return;
           
