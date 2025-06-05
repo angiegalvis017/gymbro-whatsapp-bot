@@ -625,27 +625,26 @@ async function initializeBot() {
           return;
         }
         
-        // NUEVO: Comando para cancelar espera de asesor Addi
-        if (text === 'cancelar' ) {
-          console.log('🚫 Usuario canceló espera de asesor Addi');
-          
-          // Limpiar timeout
-          if (userStates[telefono].timeoutAsesor) {
-            clearTimeout(userStates[telefono].timeoutAsesor);
-          }
-          
-          // Resetear estados
-          userStates[telefono].esperandoAsesor = false;
-          userStates[telefono].esperandoCedula = false;
-          userStates[telefono].timeoutAsesor = null;
-          userStates[telefono].contratarState = 'initial';
-          
-          await safeSendText(client, telefono, 
-            '✅ Has cancelado la espera del asesor.\n\n' +
-            'Puedes continuar usando el bot normalmente. Escribe "menu" para volver al menú principal.'
-          );
-          return;
-        }
+       if (text === 'cancelar') {
+  console.log('🚫 Usuario canceló espera de asesor Addi');
+  
+  // Limpiar timeout
+  if (userStates[telefono].timeoutAddi) {
+    clearTimeout(userStates[telefono].timeoutAddi);
+  }
+  
+  // Resetear estados (usando los nombres correctos)
+  userStates[telefono].redirigiendoAsesor = false;
+  userStates[telefono].esperandoCedulaAddi = false;
+  userStates[telefono].timeoutAddi = null;
+  userStates[telefono].contratarState = 'initial';
+  
+  await safeSendText(client, telefono,
+    '✅ Has cancelado la espera del asesor.\n\n' +
+    'Puedes continuar usando el bot normalmente. Escribe "menu" para volver al menú principal.'
+  );
+  return;
+}
         
         // Manejo de respuestas para el flujo de contratación
         if (text === 'sí' || text === 'si') {
