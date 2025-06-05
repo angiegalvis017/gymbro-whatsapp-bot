@@ -1145,6 +1145,7 @@ async function initializeBot() {
     throw error;
   }
 }
+// ... todo tu código existente ...
 
 // Monitoreo de memoria
 setInterval(() => {
@@ -1159,6 +1160,18 @@ setInterval(() => {
     process.exit(1);
   }
 }, 300000);
+
+// ⬇️ AGREGAR AQUÍ (después del monitoreo de memoria)
+// Evitar que Render "duerma" el servicio
+setInterval(async () => {
+  try {
+    // Usar fetch nativo de Node.js 18+
+    const response = await fetch('https://gymbro-whatsapp-bot.onrender.com/');
+    console.log('🔄 Keep-alive ping successful');
+  } catch (error) {
+    console.log('⚠️ Keep-alive ping failed:', error.message);
+  }
+}, 600000); // Cada 10 minutos
 
 // Inicializar el bot
 console.log('🚀 Iniciando GYMBRO Bot optimizado para Render...');
