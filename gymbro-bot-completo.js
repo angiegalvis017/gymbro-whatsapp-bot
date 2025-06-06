@@ -726,11 +726,18 @@ async function testDatabaseConnection() {
 
 async function safeSendMessage(client, to, message) {
   try {
+    if (!client || !clientReady) {
+      addLog('error', `No se puede enviar mensaje: cliente no listo. Cliente: ${!!client}, Ready: ${clientReady}`);
+      return false;
+    }
+    
+    addLog('info', `Enviando mensaje a ${to}: ${message.substring(0, 100)}...`);
     await client.sendMessage(to, message);
-    addLog('info', `Mensaje enviado a ${to}`);
+    addLog('success', `✅ Mensaje enviado exitosamente a ${to}`);
     return true;
   } catch (error) {
-    addLog('error', `Error enviando a ${to}: ${error.message}`);
+    addLog('error', `❌ Error enviando mensaje a ${to}: ${error.message}`);
+    console.error('Error completo:', error);
     return false;
   }
 }
@@ -908,6 +915,7 @@ function setupMessageHandlers(client) {
       const text = message.body.toLowerCase().trim();
       
       addLog('info', `Procesando: "${text}" de ${message._data.notifyName || 'Usuario'}`);
+      addLog('info', `Estado: Bot=${clientReady}, Usuario=${telefono}, Términos=${userStates[telefono]?.acceptedTerms}, Sede=${userStates[telefono]?.selectedLocation}`);
       
       if (userStates[telefono]?.redirigiendoAsesor) {
         addLog('info', `Mensaje ignorado (en espera de asesor humano) de ${telefono}`);
@@ -946,6 +954,19 @@ function setupMessageHandlers(client) {
       if (text === 'stats' || text === 'estadisticas') {
         addLog('info', 'Comando stats recibido');
         await safeSendMessage(client, telefono, `📊 Usuarios activos: ${Object.keys(userStates).length}`);
+        return;
+      }
+
+      if (text === 'debug' || text === 'estado') {
+        addLog('info', 'Comando debug recibido');
+        const estado = userStates[telefono];
+        await safeSendMessage(client, telefono, 
+          `🔍 Tu estado actual:\n` +
+          `✅ Términos: ${estado.acceptedTerms}\n` +
+          `🏢 Sede: ${estado.selectedLocation || 'No seleccionada'}\n` +
+          `💳 Plan: ${estado.selectedPlan || 'No seleccionado'}\n` +
+          `⏰ Última interacción: ${new Date(estado.lastInteraction).toLocaleString()}`
+        );
         return;
       }
       
@@ -1088,6 +1109,8 @@ function setupMessageHandlers(client) {
       // A partir de aquí, el usuario ya aceptó términos y seleccionó sede
       const currentLocation = userStates[telefono].selectedLocation;
       
+      addLog('info', `Procesando comando para sede ${currentLocation}: "${text}"`);
+      
       // MENÚ PRINCIPAL y otras opciones
       if (text === '1' || text.includes('informacion') || text.includes('información')) {
         let infoAdicional = '';
@@ -1158,10 +1181,12 @@ function setupMessageHandlers(client) {
         }
 
       } else if (text.includes('motivado')) {
+        addLog('info', `Plan motivado solicitado por ${telefono} en sede ${currentLocation}`);
         if (currentLocation === '20 de Julio') {
           userStates[telefono].selectedPlan = 'motivado';
           const pricing = locationPricing[currentLocation].motivado;
           const beneficios = pricing.beneficios.join('\n');
+          addLog('success', `Enviando info del plan motivado a ${telefono}`);
           await safeSendMessage(client, telefono,
             `🔥 *PLAN GYMBRO MOTIVAD@ - SEDE ${currentLocation.toUpperCase()} - ${pricing.mensual},000/mes* 🔥\n\n` +
             beneficios + '\n\n' +
@@ -1169,8 +1194,10 @@ function setupMessageHandlers(client) {
             'Escribe "menu" para volver al menú principal'
           );
         } else {
+          addLog('warning', `Plan motivado no disponible en ${currentLocation} para ${telefono}`);
           await safeSendMessage(client, telefono, '❓ Esta membresía no está disponible en la sede Venecia.\n\nEscribe "2" para ver los planes disponibles en esta sede.');
         }
+        return; // Importante: evitar que caiga en el else final
 
       } else if (text.includes('firme')) {
         if (currentLocation === '20 de Julio') {
@@ -1186,6 +1213,7 @@ function setupMessageHandlers(client) {
         } else {
           await safeSendMessage(client, telefono, '❓ Esta membresía no está disponible en la sede Venecia.\n\nEscribe "2" para ver los planes disponibles.');
         }
+        return;
 
       } else if (text.includes('disciplinado')) {
         if (currentLocation === '20 de Julio') {
@@ -1233,10 +1261,12 @@ function setupMessageHandlers(client) {
         }
 
       } else if (text.includes('flash')) {
+        addLog('info', `Plan flash solicitado por ${telefono} en sede ${currentLocation}`);
         if (currentLocation === 'Venecia') {
           userStates[telefono].selectedPlan = 'flash';
           const pricing = locationPricing[currentLocation].flash;
           const beneficios = pricing.beneficios.join('\n');
+          addLog('success', `Enviando info del plan flash a ${telefono}`);
           await safeSendMessage(client, telefono,
             `⚡ *PLAN GYMBRO FLASH - SEDE ${currentLocation.toUpperCase()} - ${pricing.mensual},000/mes* ⚡\n\n` +
             beneficios + '\n\n' +
@@ -1244,8 +1274,10 @@ function setupMessageHandlers(client) {
             'Escribe "menu" para volver al menú principal'
           );
         } else {
+          addLog('warning', `Plan flash no disponible en ${currentLocation} para ${telefono}`);
           await safeSendMessage(client, telefono, '❓ Este plan no está disponible en la sede 20 de Julio.\n\nEscribe "2" para ver las membresías disponibles.');
         }
+        return;
 
       } else if (text.includes('class')) {
         if (currentLocation === 'Venecia') {
@@ -1492,6 +1524,8 @@ function setupMessageHandlers(client) {
         );
 
       } else {
+        addLog('warning', `Mensaje no reconocido de ${telefono}: "${text}" en sede ${currentLocation}`);
+        addLog('info', `Estado usuario: términos=${userStates[telefono].acceptedTerms}, sede=${userStates[telefono].selectedLocation}`);
         await safeSendMessage(client, telefono,
           '🤖 No entendí tu mensaje. Por favor selecciona una opción válida o escribe "menu" para volver al inicio.\n\n' +
           'Comandos disponibles:\n' +
