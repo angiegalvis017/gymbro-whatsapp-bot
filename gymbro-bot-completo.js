@@ -736,10 +736,10 @@ async function testDatabaseConnection() {
 async function safeSendMessage(client, to, message) {
   try {
     await client.sendMessage(to, message);
-    // Solo logear errores para ahorrar memoria
+    addLog('success', `✅ Mensaje enviado a ${to.substring(0, 15)}`);
     return true;
   } catch (error) {
-    addLog('error', `❌ Error enviando: ${error.message}`);
+    addLog('error', `❌ Error enviando a ${to.substring(0, 15)}: ${error.message}`);
     return false;
   }
 }
@@ -922,14 +922,36 @@ function setupMessageHandlers(client) {
           waitingForExperience: false,
           redirigiendoAsesor: false
         };
-        addLog('info', `🆕 Nuevo usuario: ${telefono}`);
+        addLog('info', `🆕 Nuevo usuario: ${telefono.substring(0, 15)}`);
       }
       
       userStates[telefono].lastInteraction = Date.now();
       
+      // Mostrar estado actual del usuario para debugging
+      addLog('info', `Estado usuario ${telefono.substring(0, 15)}: términos=${userStates[telefono].acceptedTerms}, sede=${userStates[telefono].selectedLocation}`);
+      
       // Comandos de prueba simples
       if (text === 'test') {
         await safeSendMessage(client, telefono, '🤖 ¡Bot funcionando! 💪');
+        return;
+      }
+      
+      if (text === 'reset' || text === 'reiniciar') {
+        delete userStates[telefono];
+        await safeSendMessage(client, telefono, '🔄 Tu estado ha sido reiniciado. Escribe "hola" para empezar de nuevo.');
+        return;
+      }
+      
+      if (text === 'debug' || text === 'estado') {
+        const estado = userStates[telefono];
+        const debugInfo = `🔍 *DEBUG - Tu estado actual:*\n\n` +
+          `✅ Términos aceptados: ${estado.acceptedTerms}\n` +
+          `🏢 Sede seleccionada: ${estado.selectedLocation || 'Ninguna'}\n` +
+          `💳 Plan seleccionado: ${estado.selectedPlan || 'Ninguno'}\n` +
+          `⏰ Última interacción: ${new Date(estado.lastInteraction).toLocaleString()}\n\n` +
+          `Escribe "reset" para reiniciar tu estado.`;
+        
+        await safeSendMessage(client, telefono, debugInfo);
         return;
       }
       
@@ -952,9 +974,12 @@ function setupMessageHandlers(client) {
       
       // PASO 1: Aceptación de términos
       if (!userStates[telefono].acceptedTerms) {
+        addLog('info', `Usuario ${telefono.substring(0, 15)} no ha aceptado términos. Mensaje: "${text}"`);
+        
         if (text === 'acepto') {
           userStates[telefono].acceptedTerms = true;
-          addLog('success', `✅ Términos aceptados: ${telefono.substring(0, 15)}`);
+          addLog('success', `✅ Usuario ${telefono.substring(0, 15)} aceptó términos. Estado actualizado: ${JSON.stringify(userStates[telefono])}`);
+          
           await safeSendMessage(client, telefono,
             '🏋️‍♂️ ¡Hola, hablas con GABRIELA tu asistente virtual bienvenido a GYMBRO! 🏋️‍♀️\n\n' +
             '¿En cuál de nuestras sedes te encuentras interesad@?\n\n' +
@@ -977,12 +1002,15 @@ function setupMessageHandlers(client) {
       
       // PASO 2: Selección de sede
       if (!userStates[telefono].selectedLocation) {
-        if (text === '1' || text.includes('julio')) {
+        addLog('info', `Usuario ${telefono.substring(0, 15)} necesita seleccionar sede. Mensaje: "${text}"`);
+        
+        if (text === '1' || text.includes('julio') || text.includes('20')) {
           userStates[telefono].selectedLocation = '20 de Julio';
-          addLog('success', `🏢 Sede 20 de Julio: ${telefono.substring(0, 15)}`);
+          addLog('success', `🏢 Usuario ${telefono.substring(0, 15)} seleccionó 20 de Julio`);
+          
           await safeSendMessage(client, telefono,
-            '📍 *SEDE 20 DE JULIO* 📍\n\n' +
-            'Nuestra sede en 20 de Julio está equipada con lo último en tecnología y personal capacitado.\n\n' +
+            '📍 *SEDE 20 DE JULIO SELECCIONADA* 📍\n\n' +
+            'Perfecto! Nuestra sede en 20 de Julio está equipada con lo último en tecnología.\n\n' +
             '🏋️‍♂️ *MENÚ PRINCIPAL* 🏋️‍♀️\n\n' +
             'Escribe el número de tu opción:\n\n' +
             '1️⃣ Información sobre nuestro gimnasio\n' +
@@ -990,18 +1018,18 @@ function setupMessageHandlers(client) {
             '3️⃣ Sedes y horarios\n' +
             '4️⃣ Horarios clases grupales\n' +
             '5️⃣ Trabaja con nosotros\n' +
-            '0️⃣ Volver al inicio\n' +
-            'Escribe en cualquier momento "salir" para finalizar el chat'
+            '0️⃣ Volver al inicio'
           );
           return;
         } 
         
         if (text === '2' || text.includes('venecia')) {
           userStates[telefono].selectedLocation = 'Venecia';
-          addLog('success', `🏢 Sede Venecia: ${telefono.substring(0, 15)}`);
+          addLog('success', `🏢 Usuario ${telefono.substring(0, 15)} seleccionó Venecia`);
+          
           await safeSendMessage(client, telefono,
-            '📍 *SEDE VENECIA* 📍\n\n' +
-            'Nuestra sede en Venecia está diseñada para que puedas entrenar cómodo y seguro.\n\n' +
+            '📍 *SEDE VENECIA SELECCIONADA* 📍\n\n' +
+            'Excelente! Nuestra sede en Venecia está diseñada para tu comodidad.\n\n' +
             '🏋️‍♂️ *MENÚ PRINCIPAL* 🏋️‍♀️\n\n' +
             'Escribe el número de tu opción:\n\n' +
             '1️⃣ Información sobre nuestro gimnasio\n' +
@@ -1009,17 +1037,18 @@ function setupMessageHandlers(client) {
             '3️⃣ Sedes y horarios\n' +
             '4️⃣ Horarios clases grupales\n' +
             '5️⃣ Trabaja con nosotros\n' +
-            '0️⃣ Volver al inicio\n' +
-            'Escribe en cualquier momento "salir" para finalizar el chat'
+            '0️⃣ Volver al inicio'
           );
           return;
         }
         
         // Si no seleccionó sede válida
+        addLog('warning', `Usuario ${telefono.substring(0, 15)} envió "${text}" pero no es una opción válida para seleccionar sede`);
         await safeSendMessage(client, telefono,
-          '📍 Por favor, selecciona una de nuestras sedes para continuar:\n\n' +
-          '1️⃣ - Para sede 20 de Julio \n' +
-          '2️⃣ - Para sede Venecia'
+          '📍 Por favor, selecciona una de nuestras sedes:\n\n' +
+          '🔸 Escribe *1* para sede 20 de Julio\n' +
+          '🔸 Escribe *2* para sede Venecia\n\n' +
+          'O escribe "reset" si necesitas empezar de nuevo.'
         );
         return;
       }
@@ -1463,8 +1492,14 @@ function setupMessageHandlers(client) {
       }
       
     } catch (error) {
-      addLog('error', `Error procesando mensaje: ${error.message}`);
-      await safeSendMessage(client, telefono, '⚠️ Ocurrió un error. Intenta escribir "test" para verificar que el bot funciona.');
+      addLog('error', `Error procesando mensaje de ${telefono.substring(0, 15)}: ${error.message}`);
+      addLog('error', `Stack trace: ${error.stack}`);
+      
+      try {
+        await safeSendMessage(client, telefono, '⚠️ Ocurrió un error procesando tu mensaje. Escribe "reset" para reiniciar o "test" para verificar que el bot funciona.');
+      } catch (sendError) {
+        addLog('error', `Error enviando mensaje de error: ${sendError.message}`);
+      }
     }
   });
 }
