@@ -15,14 +15,15 @@ let clientReady = false;
 let globalClient = null;
 let currentQR = null;
 let lastQRUpdate = null;
+let botLogs = [];
 let reconnectAttempts = 0;
 const userStates = {};
 
 // Configuración
 const MAX_RECONNECT_ATTEMPTS = 10;
 const RECONNECT_DELAYS = [5000, 10000, 15000, 30000, 60000];
-const INACTIVITY_TIMEOUT = 15 * 60 * 1000;
-const CLEANUP_INTERVAL = 1 * 60 * 1000;
+const INACTIVITY_TIMEOUT = 5 * 60 * 1000;
+const CLEANUP_INTERVAL = 2 * 60 * 1000;
 
 // Middleware
 app.use(express.json());
@@ -173,9 +174,23 @@ const locationPricing = {
   }
 };
 
+// Función para agregar logs al dashboard
 function addLog(type, message) {
+  const log = {
+    timestamp: new Date().toISOString(),
+    type: type,
+    message: message
+  };
+  
+  botLogs.unshift(log);
+  
+  if (botLogs.length > 100) {
+    botLogs = botLogs.slice(0, 100);
+  }
+  
   console.log(`[${type.toUpperCase()}] ${message}`);
 }
+
 // Función para alertas
 async function sendAlert(message) {
   try {
@@ -326,6 +341,22 @@ app.get('/admin', (req, res) => {
             background: rgba(76, 175, 80, 0.8);
         }
         
+        .logs-section {
+            background: rgba(255,255,255,0.15);
+            padding: 20px;
+            border-radius: 15px;
+            backdrop-filter: blur(10px);
+        }
+        
+        .logs-container {
+            background: rgba(0,0,0,0.5);
+            padding: 15px;
+            border-radius: 8px;
+            max-height: 400px;
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+        }
         
         .log-entry {
             margin-bottom: 8px;
@@ -420,6 +451,7 @@ app.get('/admin', (req, res) => {
             <button class="btn btn-warning" onclick="regenerateQR()">📱 Regenerar QR</button>
             <button class="btn btn-danger" onclick="restartBot()">🔄 Reiniciar Bot</button>
             <button class="btn" onclick="cleanupUsers()">🧹 Limpiar Usuarios</button>
+            <button class="btn" onclick="downloadLogs()">📄 Descargar Logs</button>
             <button class="btn btn-success" onclick="testMessage()">✉️ Enviar Prueba</button>
         </div>
         
@@ -435,7 +467,12 @@ app.get('/admin', (req, res) => {
             </div>
         </div>
         
-       
+        <div class="logs-section">
+            <h3>📋 Logs del Sistema</h3>
+            <div class="logs-container" id="logsContainer">
+                <p>Cargando logs...</p>
+            </div>
+        </div>
     </div>
 
     <script>
@@ -491,7 +528,15 @@ app.get('/admin', (req, res) => {
                     document.getElementById('planStats').innerHTML = planHTML || '<p>Sin datos</p>';
                 }
                 
-                
+                if (data.logs) {
+                    let logsHTML = '';
+                    data.logs.forEach(log => {
+                        const logClass = 'log-' + log.type;
+                        const time = new Date(log.timestamp).toLocaleTimeString();
+                        logsHTML += '<div class="log-entry ' + logClass + '">[' + time + '] ' + log.message + '</div>';
+                    });
+                    document.getElementById('logsContainer').innerHTML = logsHTML || '<p>Sin logs</p>';
+                }
                 
             } catch (error) {
                 console.error('Error actualizando estado:', error);
@@ -545,7 +590,9 @@ app.get('/admin', (req, res) => {
             }
         }
         
-       
+        function downloadLogs() {
+            window.open('/admin/api/logs/download', '_blank');
+        }
     </script>
 </body>
 </html>
@@ -580,7 +627,7 @@ app.get('/admin/api/status', (req, res) => {
     qr: currentQR,
     qrTimestamp: lastQRUpdate,
     stats: stats,
-   
+    logs: botLogs.slice(0, 20)
   });
 });
 
@@ -635,6 +682,15 @@ app.post('/admin/api/test-message', async (req, res) => {
   }
 });
 
+app.get('/admin/api/logs/download', (req, res) => {
+  const logsText = botLogs.map(log => 
+    `[${log.timestamp}] [${log.type.toUpperCase()}] ${log.message}`
+  ).join('\n');
+  
+  res.setHeader('Content-Type', 'text/plain');
+  res.setHeader('Content-Disposition', 'attachment; filename="gymbro-bot-logs.txt"');
+  res.send(logsText);
+});
 
 // Endpoints básicos
 app.get('/', (req, res) => {
@@ -837,7 +893,7 @@ function scheduleReconnect() {
   }, delay);
 }
 
-// ========== CONFIGURACIÓN COMPLETA DE MENSAJES ARREGLADA ========== //
+// ========== CONFIGURACIÓN COMPLETA DE MENSAJES ========== //
 
 function setupMessageHandlers(client) {
   client.on('message', async (message) => {
@@ -866,8 +922,7 @@ function setupMessageHandlers(client) {
           contratarState: 'initial',
           lastInteraction: Date.now(),
           waitingForExperience: false,
-          redirigiendoAsesor: false,
-          followUpState: null // Para manejar seguimientos
+          redirigiendoAsesor: false
         };
         addLog('info', `🆕 Nuevo usuario: ${telefono}`);
       }
@@ -884,57 +939,6 @@ function setupMessageHandlers(client) {
         delete userStates[telefono];
         await safeSendMessage(client, telefono, '👋 Chat finalizado. Escribe cualquier mensaje para volver a empezar.');
         return;
-      }
-
-      // MANEJO ESPECÍFICO DE SEGUIMIENTOS - Solo si están en estado de seguimiento
-      if (userStates[telefono].followUpState === 'waiting_contract_confirmation') {
-        if (text === 'sí' || text === 'si') {
-          const dbConnected = await testDatabaseConnection();
-          if (dbConnected) {
-            await pool.query(`
-              UPDATE interacciones
-              SET contratado = TRUE, fecha_contratacion = NOW(),
-              fecha_ultimo_seguimiento_bimestral = NOW()
-              WHERE telefono = ?
-            `, [telefono]);
-          }
-
-          userStates[telefono].waitingForExperience = true;
-          userStates[telefono].followUpState = null;
-          await safeSendMessage(client, telefono, '🎉 ¡Genial! ¿Podrías contarnos cómo ha sido tu experiencia con GYMBRO hasta ahora? 💬');
-          return;
-
-        } else if (text === 'no') {
-          userStates[telefono].followUpState = null;
-          await safeSendMessage(client, telefono, '✅ Gracias por tu respuesta. Si necesitas ayuda para iniciar tu plan, estamos disponibles.');
-          return;
-        }
-      }
-
-      // Manejo de experiencias - Solo si están esperando experiencia
-      if (userStates[telefono].waitingForExperience) {
-        if (text === 'bien' || text === 'mal') {
-          const dbConnected = await testDatabaseConnection();
-          if (dbConnected) {
-            await pool.query(`UPDATE interacciones SET experiencia = ? WHERE telefono = ?`, [text, telefono]);
-          }
-
-          await safeSendMessage(client, telefono, '🙏 ¡Gracias por elegirnos! Tus comentarios nos ayudan a mejorar cada día. 💬💪\n\nEstamos siempre para ayudarte.\n\n👋 ¡Hasta pronto!');
-          delete userStates[telefono];
-          return;
-        }
-
-        // Capturar experiencia detallada
-        if (text.includes('bien') || text.includes('excelente') || text.includes('mala') || text.length > 3) {
-          const dbConnected = await testDatabaseConnection();
-          if (dbConnected) {
-            await pool.query(`UPDATE interacciones SET experiencia = ? WHERE telefono = ?`, [text, telefono]);
-          }
-
-          await safeSendMessage(client, telefono, '🙏 ¡Gracias por elegirnos! Tus comentarios nos ayudan a mejorar cada día. 💬💪\n\nEstamos siempre para ayudarte.\n\n👋 ¡Hasta pronto!');
-          delete userStates[telefono];
-          return;
-        }
       }
       
       // PASO 1: Aceptación de términos
@@ -1016,7 +1020,7 @@ function setupMessageHandlers(client) {
       const currentLocation = userStates[telefono].selectedLocation;
       addLog('info', `💬 ${telefono} en ${currentLocation}: "${text}"`);
       
-      // TODOS LOS PLANES - SEDE 20 DE JULIO
+      // Planes específicos - 20 de Julio
       if (text.includes('motivado') && currentLocation === '20 de Julio') {
         userStates[telefono].selectedPlan = 'motivado';
         const pricing = locationPricing[currentLocation].motivado;
@@ -1033,43 +1037,7 @@ function setupMessageHandlers(client) {
         userStates[telefono].selectedPlan = 'firme';
         const pricing = locationPricing[currentLocation].firme;
         await safeSendMessage(client, telefono,
-          `⚡ *MEMBRESÍA BIMESTRE FIRME - SEDE 20 DE JULIO - ${pricing.mensual},000* ⚡\n\n` +
-          pricing.beneficios.join('\n') + '\n\n' +
-          'Escribe "contratar" para proceder\n' +
-          'Escribe "menu" para volver al menú principal'
-        );
-        return;
-      }
-
-      if (text.includes('disciplinado') && currentLocation === '20 de Julio') {
-        userStates[telefono].selectedPlan = 'disciplinado';
-        const pricing = locationPricing[currentLocation].disciplinado;
-        await safeSendMessage(client, telefono,
-          `🏋️ *MEMBRESÍA TRIMESTRE DISCIPLINAD@ - SEDE 20 DE JULIO - ${pricing.mensual},000* 🏋️\n\n` +
-          pricing.beneficios.join('\n') + '\n\n' +
-          'Escribe "contratar" para proceder\n' +
-          'Escribe "menu" para volver al menú principal'
-        );
-        return;
-      }
-
-      if ((text.includes('superfitt') || text.includes('superfit')) && currentLocation === '20 de Julio') {
-        userStates[telefono].selectedPlan = 'superfitt';
-        const pricing = locationPricing[currentLocation].superfitt;
-        await safeSendMessage(client, telefono,
-          `🥇 *MEMBRESÍA SEMESTRE SUPER FITT - SEDE 20 DE JULIO - ${pricing.mensual},000* 🥇\n\n` +
-          pricing.beneficios.join('\n') + '\n\n' +
-          'Escribe "contratar" para proceder\n' +
-          'Escribe "menu" para volver al menú principal'
-        );
-        return;
-      }
-
-      if (text.includes('pro') && currentLocation === '20 de Julio') {
-        userStates[telefono].selectedPlan = 'pro';
-        const pricing = locationPricing[currentLocation].pro;
-        await safeSendMessage(client, telefono,
-          `👑 *MEMBRESÍA ANUALIDAD PRO - SEDE 20 DE JULIO - ${pricing.mensual},000* 👑\n\n` +
+          `⚡ *BIMESTRE FIRME - SEDE 20 DE JULIO - ${pricing.mensual},000* ⚡\n\n` +
           pricing.beneficios.join('\n') + '\n\n' +
           'Escribe "contratar" para proceder\n' +
           'Escribe "menu" para volver al menú principal'
@@ -1077,7 +1045,7 @@ function setupMessageHandlers(client) {
         return;
       }
       
-      // TODOS LOS PLANES - SEDE VENECIA
+      // Planes específicos - Venecia
       if (text.includes('flash') && currentLocation === 'Venecia') {
         userStates[telefono].selectedPlan = 'flash';
         const pricing = locationPricing[currentLocation].flash;
@@ -1088,164 +1056,6 @@ function setupMessageHandlers(client) {
           'Escribe "menu" para volver al menú principal'
         );
         return;
-      }
-
-      if (text.includes('class') && currentLocation === 'Venecia') {
-        userStates[telefono].selectedPlan = 'class';
-        const pricing = locationPricing[currentLocation].class;
-        await safeSendMessage(client, telefono,
-          `🎓 *PLAN GYMBRO CLASS - SEDE VENECIA - ${pricing.mensual},000/mes* 🎓\n\n` +
-          pricing.beneficios.join('\n') + '\n\n' +
-          'Escribe "contratar" para proceder\n' +
-          'Escribe "menu" para volver al menú principal'
-        );
-        return;
-      }
-
-      if (text.includes('elite') && currentLocation === 'Venecia') {
-        userStates[telefono].selectedPlan = 'elite';
-        const pricing = locationPricing[currentLocation].elite;
-        await safeSendMessage(client, telefono,
-          `🎖 *PLAN GYMBRO ELITE - SEDE VENECIA - ${pricing.mensual},000/mes* 🎖\n\n` +
-          pricing.beneficios.join('\n') + '\n\n' +
-          'Escribe "contratar" para proceder\n' +
-          'Escribe "menu" para volver al menú principal'
-        );
-        return;
-      }
-
-      if (text.includes('bro') && !text.includes('trimestre') && !text.includes('semestre') && currentLocation === 'Venecia') {
-        userStates[telefono].selectedPlan = 'bro';
-        const pricing = locationPricing[currentLocation].bro;
-        await safeSendMessage(client, telefono,
-          `👥 *PLAN ENTRENA CON TU BRO - SEDE VENECIA - ${pricing.mensual},000/mes* 👥\n\n` +
-          pricing.beneficios.join('\n') + '\n\n' +
-          'Escribe "contratar" para proceder\n' +
-          'Escribe "menu" para volver al menú principal'
-        );
-        return;
-      }
-
-      if (text.includes('trimestre') && currentLocation === 'Venecia') {
-        userStates[telefono].selectedPlan = 'trimestre';
-        const pricing = locationPricing[currentLocation].trimestre;
-        await safeSendMessage(client, telefono,
-          `🔄 *PLAN BRO TRIMESTRE - SEDE VENECIA - ${pricing.precio},000* 🔄\n\n` +
-          pricing.beneficios.join('\n') + '\n\n' +
-          'Escribe "contratar" para proceder\n' +
-          'Escribe "menu" para volver al menú principal'
-        );
-        return;
-      }
-
-      if (text.includes('semestre') && currentLocation === 'Venecia') {
-        userStates[telefono].selectedPlan = 'semestre';
-        const pricing = locationPricing[currentLocation].semestre;
-        await safeSendMessage(client, telefono,
-          `📆 *PLAN SEMESTRE BRO - SEDE VENECIA - ${pricing.precio},000* 📆\n\n` +
-          pricing.beneficios.join('\n') + '\n\n' +
-          'Escribe "contratar" para proceder\n' +
-          'Escribe "menu" para volver al menú principal'
-        );
-        return;
-      }
-
-      // FLUJO DE CONTRATACIÓN COMPLETO
-      if (text.includes('contratar') || userStates[telefono].contratarState === 'waitingForPaymentMethod') {
-        const planSolicitado = text.split('contratar')[1]?.trim();
-
-        if (planSolicitado && userStates[telefono].contratarState === 'initial') {
-          userStates[telefono].selectedPlan = planSolicitado;
-        }
-
-        if (userStates[telefono].selectedPlan && userStates[telefono].contratarState === 'initial') {
-          userStates[telefono].contratarState = 'waitingForPaymentMethod';
-          await safeSendMessage(client, telefono,
-            `✅ ¡Perfecto! Para contratar el plan *${userStates[telefono].selectedPlan}*, selecciona tu método de pago:\n\n` +
-            `• Bancolombia/Nequi/Daviplata (Transferencia)\n` +
-            `• Addi\n` +
-            `• Tarjeta de Crédito/Débito\n` +
-            `• Efectivo (En la sede)\n` +
-            `• PSE\n` +
-            `• Volver al menú principal\n\n` +
-            `Puedes escribir el *nombre* del método de pago.`
-          );
-          return;
-        }
-
-        if (userStates[telefono].contratarState === 'waitingForPaymentMethod') {
-          userStates[telefono].contratarState = 'initial';
-
-          let metodoPago = null;
-          let esperandoCedula = false;
-
-          if (text.includes('bancolombia') || text.includes('nequi') || text.includes('daviplata') || text.includes('transferencia')) {
-            metodoPago = 'transferencia';
-          } else if (text.includes('addi')) {
-            metodoPago = 'addi';
-          } else if (text.includes('tarjeta') || text.includes('crédito') || text.includes('débito')) {
-            metodoPago = 'tarjeta';
-          } else if (text.includes('efectivo')) {
-            metodoPago = 'efectivo';
-          } else if (text.includes('pse')) {
-            metodoPago = 'pse';
-          } else if (text === '0' || text.includes('menu') || text.includes('menú')) {
-            // Volver al menú principal
-          } else {
-            await safeSendMessage(client, telefono, '❌ Opción de pago inválida. Por favor, selecciona una opción válida.');
-            userStates[telefono].contratarState = 'waitingForPaymentMethod';
-            await safeSendMessage(client, telefono,
-              `✅ ¡Perfecto! Para contratar el plan *${userStates[telefono].selectedPlan}*, selecciona tu método de pago:\n\n` +
-              `• Bancolombia/Nequi/Daviplata (Transferencia)\n` +
-              `• Addi\n` +
-              `• Tarjeta de Crédito/Débito\n` +
-              `• Efectivo (En la sede)\n` +
-              `• PSE\n` +
-              `• Volver al menú principal\n\n` +
-              `Puedes escribir el *nombre* del método de pago.`
-            );
-            return;
-          }
-
-          if (esperandoCedula && /^\d{7,10}$/.test(message.body.trim())) {
-            esperandoCedula = false;
-            await safeSendMessage(client, telefono, '✅ Gracias, recibimos tu cédula.');
-            await safeSendMessage(client, telefono, '🔄 Te estamos transfiriendo con uno de nuestros asesores, espera un momento en línea.');
-          }
-
-          if (metodoPago === 'transferencia') {
-            let imagePath;
-            if (currentLocation === 'Venecia') {
-              imagePath = './qr_venecia.jpg';
-            } else if (currentLocation === '20 de Julio') {
-              imagePath = './qr_20dejulio.jpg';
-            }
-
-            if (imagePath) {
-              await sendQRCode(client, telefono, imagePath);
-              await safeSendMessage(client, telefono, 'Después de realizar tu pago, si eres cliente nuevo, realiza tu inscripción aquí: Registro GYMBRO 👉 https://aplicacion.gymbrocolombia.com/registro/add');
-            } else {
-              await safeSendMessage(client, telefono, '❌ No se pudo cargar el QR. Por favor, intenta de nuevo.');
-            }
-          } else if (metodoPago === 'addi') {
-            esperandoCedula = true;
-            await safeSendMessage(client, telefono, '👉 Para pagar con Addi: requiero tu cédula y te llegará un link a tu celular');
-            await safeSendMessage(client, telefono, 'Recuerda enviarnos el comprobante después de realizar tu pago. Si eres cliente nuevo, realiza tu inscripción aquí: Registro GYMBRO 👉 https://aplicacion.gymbrocolombia.com/registro/add');
-          } else if (metodoPago === 'tarjeta') {
-            await safeSendMessage(client, telefono, `💳 Para pagar con tarjeta, por favor dirígete a la recepción de la sede *${currentLocation}*.`);
-          } else if (metodoPago === 'efectivo') {
-            await safeSendMessage(client, telefono, `💰 Para pagar en *Efectivo*, por favor dirígete a la recepción de la sede *${currentLocation}*.`);
-          } else if (metodoPago === 'pse') {
-            await safeSendMessage(client, telefono, '👉 Sigue este enlace para pagar con PSE: https://checkout.wompi.co/l/VPOS_tTb23T');
-            await safeSendMessage(client, telefono, 'Recuerda enviarnos el comprobante después de realizar tu pago, si eres cliente nuevo, realiza tu inscripción aquí: Registro GYMBRO 👉 https://aplicacion.gymbrocolombia.com/registro/add');
-          }
-
-          userStates[telefono].selectedPlan = null;
-          return;
-        } else {
-          await safeSendMessage(client, telefono, '❓ No pudimos identificar el plan que deseas contratar.\n\nEscribe "2" para volver a ver nuestras membresías.');
-          return;
-        }
       }
       
       // Información del gimnasio
@@ -1268,7 +1078,7 @@ function setupMessageHandlers(client) {
       }
       
       // Membresías y tarifas
-    if (text.trim() === '2' || text.includes('membresia')) {
+      if (text === '2' || text.includes('membresia')) {
         if (currentLocation === '20 de Julio') {
           await safeSendMessage(client, telefono,
             `💪 *MEMBRESÍAS - SEDE 20 DE JULIO* 💪\n\n` +
@@ -1293,69 +1103,6 @@ function setupMessageHandlers(client) {
         }
         return;
       }
-
-      // Otras opciones del menú
-      if (text === '3' || text.includes('sede') || text.includes('horario')) {
-        await safeSendMessage(client, telefono,
-          '📍 *Horarios y Sedes GYMBRO* 🕒\n\n' +
-          '*Sede 20 de Julio*\n' +
-          '📍 Dirección: Cra. 5a #32 21 Sur\n' +
-          '🕐 Horario: Lunes a viernes 5am - 10pm / Sábados 7am - 5pm / Domingos 8am - 4pm\n\n' +
-          '*Sede Venecia*\n' +
-          '📍 Dirección: Tv. 44 #51b 30 Sur\n' +
-          '🕐 Horario: Lunes a viernes 5am - 10pm / Sábados 7am - 5pm / Domingos 8am - 4pm\n\n' +
-          'Escribe "menu" para volver al menú principal.'
-        );
-        return;
-      }
-
-      if (text === '4') {
-        await safeSendMessage(client, telefono,
-          '📅 *Horarios de Clases Grupales*\n\n' +
-          '🕐 Lunes a Viernes:\n' +
-          '🟢 *7:00 a.m.*\n' +
-          '🟢 *7:00 p.m.*\n\n' +
-          '💪 Te esperamos para entrenar juntos y mantener la energía al 100%.\n\n' +
-          'Escribe *"menu"* para regresar al menú principal.'
-        );
-        return;
-      }
-
-      if (text === '5') {
-        await safeSendMessage(client, telefono,
-          '🙌 ¡Qué alegría que quieras hacer parte de nuestra familia GYMBRO!\n\n' +
-          '📄 Si estás interesado en trabajar con nosotros, envíanos tu hoja de vida al siguiente número de WhatsApp: +57 318 6196126.\n\n' +
-          'Te contactaremos si hay una vacante que se ajuste a tu perfil.\n\n' +
-          'Escribe *"menu"* para regresar al menú principal.'
-        );
-        return;
-      }
-
-      // Comandos especiales
-      if (text.includes('permanencia') || text.includes('atadura') || text.includes('amarrado')) {
-        await safeSendMessage(client, telefono,
-          '💪 ¡En GYMBRO no tenemos ninguna atadura! Puedes cancelar tu membresía cuando lo desees. Queremos que te quedes porque amas entrenar, no por obligación.\n\n' +
-          'Escribe "menu" para volver al menú principal o consulta alguna otra opción.'
-        );
-        return;
-      }
-
-      if (text.includes('asesor')) {
-        userStates[telefono].redirigiendoAsesor = true;
-        await safeSendMessage(client, telefono,
-          '💬 Te estoy redirigiendo a un asesor. Por favor, espera en línea. Un asesor humano continuará la conversación contigo.'
-        );
-        return;
-      }
-
-      if (text.includes('inscripcion') || text.includes('inscripción') || text.includes('registro')) {
-        await safeSendMessage(client, telefono,
-          '💪 ¡En GYMBRO no cobramos inscripción! Queremos que hagas parte de nuestra familia fitness. Puedes adquirir tu membresía cuando lo desees o acercarte a conocer nuestras instalaciones sin compromiso. ¡Te esperamos!\n\n' +
-          'Realiza tu inscripción aquí: Registro GYMBRO 👉 https://aplicacion.gymbrocolombia.com/registro/add\n\n' +
-          'Escribe "menu" para volver al menú principal.'
-        );
-        return;
-      }
       
       // Menú principal
       if (text === 'menu' || text === '0') {
@@ -1376,7 +1123,6 @@ function setupMessageHandlers(client) {
         '🤖 No entendí tu mensaje. Escribe "menu" para ver las opciones disponibles.\n\n' +
         'Comandos útiles:\n' +
         '• "menu" - Menú principal\n' +
-        '• "asesor" - Hablar con humano\n' +
         '• "test" - Probar bot\n' +
         '• "salir" - Finalizar chat'
       );
@@ -1515,11 +1261,12 @@ process.on('unhandledRejection', async (reason) => {
 setInterval(() => {
   const used = process.memoryUsage();
   addLog('info', `Memoria: ${Math.round(used.heapUsed / 1024 / 1024)}MB / Usuarios: ${Object.keys(userStates).length}`);
-  if (used.heapUsed > 512 * 1024 * 1024) {
-  addLog('error', 'Uso de memoria alto (>512MB), reiniciando...');
-  sendAlert('Reiniciando por uso alto de memoria');
-  process.exit(1);
-}
+  
+  if (used.heapUsed > 1024 * 1024 * 1024) {
+    addLog('error', 'Uso de memoria alto, reiniciando...');
+    sendAlert('Reiniciando por uso alto de memoria');
+    process.exit(1);
+  }
 }, 300000);
 
 // Iniciar servidor
