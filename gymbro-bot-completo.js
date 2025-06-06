@@ -1324,7 +1324,7 @@ function setupMessageHandlers(client) {
       }
       
       // Membresías y tarifas
-      if (text === '2' || text.includes('membresia')) {
+    if (text.trim() === '2' || text.includes('membresia')) {
         if (currentLocation === '20 de Julio') {
           await safeSendMessage(client, telefono,
             `💪 *MEMBRESÍAS - SEDE 20 DE JULIO* 💪\n\n` +
