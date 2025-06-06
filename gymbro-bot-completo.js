@@ -15,7 +15,6 @@ let clientReady = false;
 let globalClient = null;
 let currentQR = null;
 let lastQRUpdate = null;
-let botLogs = [];
 let reconnectAttempts = 0;
 const userStates = {};
 
@@ -174,23 +173,9 @@ const locationPricing = {
   }
 };
 
-// Función para agregar logs al dashboard
 function addLog(type, message) {
-  const log = {
-    timestamp: new Date().toISOString(),
-    type: type,
-    message: message
-  };
-  
-  botLogs.unshift(log);
-  
-  if (botLogs.length > 100) {
-    botLogs = botLogs.slice(0, 100);
-  }
-  
   console.log(`[${type.toUpperCase()}] ${message}`);
 }
-
 // Función para alertas
 async function sendAlert(message) {
   try {
@@ -341,22 +326,6 @@ app.get('/admin', (req, res) => {
             background: rgba(76, 175, 80, 0.8);
         }
         
-        .logs-section {
-            background: rgba(255,255,255,0.15);
-            padding: 20px;
-            border-radius: 15px;
-            backdrop-filter: blur(10px);
-        }
-        
-        .logs-container {
-            background: rgba(0,0,0,0.5);
-            padding: 15px;
-            border-radius: 8px;
-            max-height: 400px;
-            overflow-y: auto;
-            font-family: 'Courier New', monospace;
-            font-size: 14px;
-        }
         
         .log-entry {
             margin-bottom: 8px;
@@ -451,7 +420,6 @@ app.get('/admin', (req, res) => {
             <button class="btn btn-warning" onclick="regenerateQR()">📱 Regenerar QR</button>
             <button class="btn btn-danger" onclick="restartBot()">🔄 Reiniciar Bot</button>
             <button class="btn" onclick="cleanupUsers()">🧹 Limpiar Usuarios</button>
-            <button class="btn" onclick="downloadLogs()">📄 Descargar Logs</button>
             <button class="btn btn-success" onclick="testMessage()">✉️ Enviar Prueba</button>
         </div>
         
@@ -467,12 +435,7 @@ app.get('/admin', (req, res) => {
             </div>
         </div>
         
-        <div class="logs-section">
-            <h3>📋 Logs del Sistema</h3>
-            <div class="logs-container" id="logsContainer">
-                <p>Cargando logs...</p>
-            </div>
-        </div>
+       
     </div>
 
     <script>
@@ -528,15 +491,7 @@ app.get('/admin', (req, res) => {
                     document.getElementById('planStats').innerHTML = planHTML || '<p>Sin datos</p>';
                 }
                 
-                if (data.logs) {
-                    let logsHTML = '';
-                    data.logs.forEach(log => {
-                        const logClass = 'log-' + log.type;
-                        const time = new Date(log.timestamp).toLocaleTimeString();
-                        logsHTML += '<div class="log-entry ' + logClass + '">[' + time + '] ' + log.message + '</div>';
-                    });
-                    document.getElementById('logsContainer').innerHTML = logsHTML || '<p>Sin logs</p>';
-                }
+                
                 
             } catch (error) {
                 console.error('Error actualizando estado:', error);
@@ -590,9 +545,7 @@ app.get('/admin', (req, res) => {
             }
         }
         
-        function downloadLogs() {
-            window.open('/admin/api/logs/download', '_blank');
-        }
+       
     </script>
 </body>
 </html>
@@ -627,7 +580,7 @@ app.get('/admin/api/status', (req, res) => {
     qr: currentQR,
     qrTimestamp: lastQRUpdate,
     stats: stats,
-    logs: botLogs.slice(0, 20)
+   
   });
 });
 
@@ -682,15 +635,6 @@ app.post('/admin/api/test-message', async (req, res) => {
   }
 });
 
-app.get('/admin/api/logs/download', (req, res) => {
-  const logsText = botLogs.map(log => 
-    `[${log.timestamp}] [${log.type.toUpperCase()}] ${log.message}`
-  ).join('\n');
-  
-  res.setHeader('Content-Type', 'text/plain');
-  res.setHeader('Content-Disposition', 'attachment; filename="gymbro-bot-logs.txt"');
-  res.send(logsText);
-});
 
 // Endpoints básicos
 app.get('/', (req, res) => {
@@ -1571,12 +1515,11 @@ process.on('unhandledRejection', async (reason) => {
 setInterval(() => {
   const used = process.memoryUsage();
   addLog('info', `Memoria: ${Math.round(used.heapUsed / 1024 / 1024)}MB / Usuarios: ${Object.keys(userStates).length}`);
-  
-  if (used.heapUsed > 1024 * 1024 * 1024) {
-    addLog('error', 'Uso de memoria alto, reiniciando...');
-    sendAlert('Reiniciando por uso alto de memoria');
-    process.exit(1);
-  }
+  if (used.heapUsed > 512 * 1024 * 1024) {
+  addLog('error', 'Uso de memoria alto (>512MB), reiniciando...');
+  sendAlert('Reiniciando por uso alto de memoria');
+  process.exit(1);
+}
 }, 300000);
 
 // Iniciar servidor
