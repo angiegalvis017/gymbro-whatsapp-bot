@@ -726,18 +726,11 @@ async function testDatabaseConnection() {
 
 async function safeSendMessage(client, to, message) {
   try {
-    if (!client || !clientReady) {
-      addLog('error', `No se puede enviar mensaje: cliente no listo. Cliente: ${!!client}, Ready: ${clientReady}`);
-      return false;
-    }
-    
-    addLog('info', `Enviando mensaje a ${to}: ${message.substring(0, 100)}...`);
     await client.sendMessage(to, message);
-    addLog('success', `✅ Mensaje enviado exitosamente a ${to}`);
+    addLog('success', `✅ Enviado a ${to.substring(0, 15)}...`);
     return true;
   } catch (error) {
-    addLog('error', `❌ Error enviando mensaje a ${to}: ${error.message}`);
-    console.error('Error completo:', error);
+    addLog('error', `❌ Error enviando a ${to}: ${error.message}`);
     return false;
   }
 }
@@ -905,8 +898,7 @@ function scheduleReconnect() {
 function setupMessageHandlers(client) {
   client.on('message', async (message) => {
     try {
-      addLog('info', `Mensaje recibido de ${message.from}: ${message.body ? message.body.substring(0, 50) + '...' : 'sin texto'}`);
-      
+      // Filtrar solo mensajes de chat con texto
       if (message.type !== 'chat' || !message.body) {
         return;
       }
@@ -914,14 +906,14 @@ function setupMessageHandlers(client) {
       const telefono = message.from;
       const text = message.body.toLowerCase().trim();
       
-      addLog('info', `Procesando: "${text}" de ${message._data.notifyName || 'Usuario'}`);
-      addLog('info', `Estado: Bot=${clientReady}, Usuario=${telefono}, Términos=${userStates[telefono]?.acceptedTerms}, Sede=${userStates[telefono]?.selectedLocation}`);
+      addLog('info', `📩 ${telefono}: "${text}"`);
       
       if (userStates[telefono]?.redirigiendoAsesor) {
-        addLog('info', `Mensaje ignorado (en espera de asesor humano) de ${telefono}`);
+        addLog('info', `🚫 Mensaje ignorado (asesor humano): ${telefono}`);
         return;
       }
       
+      // Inicializar estado si no existe
       if (!userStates[telefono]) {
         userStates[telefono] = {
           acceptedTerms: false,
@@ -932,45 +924,114 @@ function setupMessageHandlers(client) {
           waitingForExperience: false,
           redirigiendoAsesor: false
         };
-        addLog('info', `Nuevo usuario inicializado: ${telefono}`);
+        addLog('info', `🆕 Nuevo usuario: ${telefono}`);
       }
       
       userStates[telefono].lastInteraction = Date.now();
       
-      // Comandos de prueba y administración
+      // Comandos de prueba simples
       if (text === 'test') {
-        addLog('info', 'Comando test recibido');
-        await safeSendMessage(client, telefono, '🤖 ¡Bot funcionando correctamente! 💪');
+        await safeSendMessage(client, telefono, '🤖 ¡Bot funcionando! 💪');
         return;
       }
-
+      
       if (text === 'cleanup' || text === 'limpiar') {
-        addLog('info', 'Comando cleanup recibido');
         await cleanupInactiveUsers(client);
         await safeSendMessage(client, telefono, '🧹 Limpieza de usuarios inactivos ejecutada');
         return;
       }
 
       if (text === 'stats' || text === 'estadisticas') {
-        addLog('info', 'Comando stats recibido');
         await safeSendMessage(client, telefono, `📊 Usuarios activos: ${Object.keys(userStates).length}`);
         return;
       }
-
-      if (text === 'debug' || text === 'estado') {
-        addLog('info', 'Comando debug recibido');
-        const estado = userStates[telefono];
-        await safeSendMessage(client, telefono, 
-          `🔍 Tu estado actual:\n` +
-          `✅ Términos: ${estado.acceptedTerms}\n` +
-          `🏢 Sede: ${estado.selectedLocation || 'No seleccionada'}\n` +
-          `💳 Plan: ${estado.selectedPlan || 'No seleccionado'}\n` +
-          `⏰ Última interacción: ${new Date(estado.lastInteraction).toLocaleString()}`
+      
+      if (text === 'salir' || text === 'finalizar') {
+        delete userStates[telefono];
+        await safeSendMessage(client, telefono, '👋 Chat finalizado. Escribe cualquier mensaje para volver a empezar.');
+        return;
+      }
+      
+      // PASO 1: Aceptación de términos
+      if (!userStates[telefono].acceptedTerms) {
+        if (text === 'acepto') {
+          userStates[telefono].acceptedTerms = true;
+          addLog('success', `✅ ${telefono} aceptó términos`);
+          await safeSendMessage(client, telefono,
+            '🏋️‍♂️ ¡Hola, hablas con GABRIELA tu asistente virtual bienvenido a GYMBRO! 🏋️‍♀️\n\n' +
+            '¿En cuál de nuestras sedes te encuentras interesad@?\n\n' +
+            '📍 Responde con:\n' +
+            '1️⃣ - Sede 20 de Julio \n' +
+            '2️⃣ - Sede Venecia\n\n' +
+            'No olvides seguirnos en nuestras redes sociales https://linktr.ee/GYMBROCOLOMBIA'
+          );
+          return;
+        }
+        
+        // Cualquier mensaje cuando no ha aceptado términos
+        addLog('info', `❓ ${telefono} necesita aceptar términos`);
+        await safeSendMessage(client, telefono,
+          '👋 ¡Hola! Soy el asistente virtual de *GYMBRO* 💪\n\n' +
+          'Para comenzar, necesito que aceptes el tratamiento de tus datos personales según nuestra política de privacidad.\n\n' +
+          '✅ Escribe *"acepto"* para continuar.'
         );
         return;
       }
       
-      // Manejo de respuestas para el flujo de contratación
+      // PASO 2: Selección de sede
+      if (!userStates[telefono].selectedLocation) {
+        if (text === '1' || text.includes('julio')) {
+          userStates[telefono].selectedLocation = '20 de Julio';
+          addLog('success', `🏢 ${telefono} seleccionó 20 de Julio`);
+          await safeSendMessage(client, telefono,
+            '📍 *SEDE 20 DE JULIO* 📍\n\n' +
+            'Nuestra sede en 20 de Julio está equipada con lo último en tecnología y personal capacitado.\n\n' +
+            '🏋️‍♂️ *MENÚ PRINCIPAL* 🏋️‍♀️\n\n' +
+            'Escribe el número de tu opción:\n\n' +
+            '1️⃣ Información sobre nuestro gimnasio\n' +
+            '2️⃣ Membresías y tarifas\n' +
+            '3️⃣ Sedes y horarios\n' +
+            '4️⃣ Horarios clases grupales\n' +
+            '5️⃣ Trabaja con nosotros\n' +
+            '0️⃣ Volver al inicio\n' +
+            'Escribe en cualquier momento "salir" para finalizar el chat'
+          );
+          return;
+        } 
+        
+        if (text === '2' || text.includes('venecia')) {
+          userStates[telefono].selectedLocation = 'Venecia';
+          addLog('success', `🏢 ${telefono} seleccionó Venecia`);
+          await safeSendMessage(client, telefono,
+            '📍 *SEDE VENECIA* 📍\n\n' +
+            'Nuestra sede en Venecia está diseñada para que puedas entrenar cómodo y seguro.\n\n' +
+            '🏋️‍♂️ *MENÚ PRINCIPAL* 🏋️‍♀️\n\n' +
+            'Escribe el número de tu opción:\n\n' +
+            '1️⃣ Información sobre nuestro gimnasio\n' +
+            '2️⃣ Membresías y tarifas\n' +
+            '3️⃣ Sedes y horarios\n' +
+            '4️⃣ Horarios clases grupales\n' +
+            '5️⃣ Trabaja con nosotros\n' +
+            '0️⃣ Volver al inicio\n' +
+            'Escribe en cualquier momento "salir" para finalizar el chat'
+          );
+          return;
+        }
+        
+        // Si no seleccionó sede válida
+        await safeSendMessage(client, telefono,
+          '📍 Por favor, selecciona una de nuestras sedes para continuar:\n\n' +
+          '1️⃣ - Para sede 20 de Julio \n' +
+          '2️⃣ - Para sede Venecia'
+        );
+        return;
+      }
+      
+      // A partir de aquí, el usuario ya seleccionó sede
+      const currentLocation = userStates[telefono].selectedLocation;
+      addLog('info', `💬 ${telefono} en ${currentLocation}: "${text}"`);
+      
+      // Manejo de experiencias y seguimiento
       if (text === 'sí' || text === 'si') {
         const dbConnected = await testDatabaseConnection();
         if (dbConnected) {
@@ -1015,346 +1076,143 @@ function setupMessageHandlers(client) {
         delete userStates[telefono];
         return;
       }
-      
-      // Comando para salir
-      if (text === 'salir' || text === 'finalizar' || text.includes('cerrar chat')) {
-        const dbConnected = await testDatabaseConnection();
-        if (dbConnected) {
-          await pool.query(
-            'INSERT INTO interacciones (telefono, plan_interesado, ultima_interaccion) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE plan_interesado = ?, ultima_interaccion = ?',
-            [telefono, userStates[telefono].selectedPlan || null, new Date(), userStates[telefono].selectedPlan || null, new Date()]
-          );
-        }
 
-        delete userStates[telefono];
-        await safeSendMessage(client, telefono, '👋 Has finalizado el chat con GYMBRO.\n\nSi deseas volver a empezar, solo escribe cualquier mensaje. ¡Estaremos aquí para ayudarte! 💪');
-        return;
-      }
-      
-      // PASO 1: Verificar aceptación de términos
-      const saludo = text.match(/^hola+[!\s.,]*$/);
-
-      if (!userStates[telefono].acceptedTerms) {
-        if (text === 'acepto') {
-          addLog('success', `Usuario aceptó términos: ${telefono}`);
-          userStates[telefono].acceptedTerms = true;
-          await safeSendMessage(client, telefono,
-            '🏋️‍♂️ ¡Hola, hablas con GABRIELA tu asistente virtual bienvenido a GYMBRO! 🏋️‍♀️\n\n' +
-            '¿En cuál de nuestras sedes te encuentras interesad@?\n\n' +
-            '📍 Responde con:\n' +
-            '1️⃣ - Sede 20 de Julio \n' +
-            '2️⃣ - Sede Venecia\n\n' +
-            'No olvides seguirnos en nuestras redes sociales https://linktr.ee/GYMBROCOLOMBIA'
-          );
-        } else if (saludo || text.includes('hola')) {
-          addLog('info', `Saludo inicial recibido de ${telefono}`);
-          await safeSendMessage(client, telefono,
-            '👋 ¡Hola! Soy el asistente virtual de *GYMBRO* 💪\n\n' +
-            'Para comenzar, necesito que aceptes el tratamiento de tus datos personales según nuestra política de privacidad.\n\n' +
-            '✅ Escribe *"acepto"* para continuar.'
-          );
-        } else {
-          await safeSendMessage(client, telefono,
-            '👋 Para comenzar necesito que aceptes el tratamiento de tus datos personales.\n\n' +
-            '✅ Escribe *"acepto"* para continuar.'
-          );
-        }
-        return;
-      }
-      
-      // PASO 2: Verificar selección de sede
-      if (!userStates[telefono].selectedLocation) {
-        if (text === '1' || text.includes('julio')) {
-          addLog('info', `Sede 20 de Julio seleccionada por ${telefono}`);
-          userStates[telefono].selectedLocation = '20 de Julio';
-          await safeSendMessage(client, telefono,
-            '📍 *SEDE 20 DE JULIO* 📍\n\n' +
-            'Nuestra sede en 20 de Julio está equipada con lo último en tecnología y personal capacitado.\n\n' +
-            '🏋️‍♂️ *MENÚ PRINCIPAL* 🏋️‍♀️\n\n' +
-            'Escribe el número de tu opción:\n\n' +
-            '1️⃣ Información sobre nuestro gimnasio\n' +
-            '2️⃣ Membresías y tarifas\n' +
-            '3️⃣ Sedes y horarios\n' +
-            '4️⃣ Horarios clases grupales\n' +
-            '5️⃣ Trabaja con nosotros\n' +
-            '0️⃣ Volver al inicio\n' +
-            'Escribe en cualquier momento "salir" para finalizar el chat'
-          );
-        } else if (text === '2' || text.includes('venecia')) {
-          addLog('info', `Sede Venecia seleccionada por ${telefono}`);
-          userStates[telefono].selectedLocation = 'Venecia';
-          await safeSendMessage(client, telefono,
-            '📍 *SEDE VENECIA* 📍\n\n' +
-            'Nuestra sede en Venecia está diseñada para que puedas entrenar cómodo y seguro.\n\n' +
-            '🏋️‍♂️ *MENÚ PRINCIPAL* 🏋️‍♀️\n\n' +
-            'Escribe el número de tu opción:\n\n' +
-            '1️⃣ Información sobre nuestro gimnasio\n' +
-            '2️⃣ Membresías y tarifas\n' +
-            '3️⃣ Sedes y horarios\n' +
-            '4️⃣ Horarios clases grupales\n' +
-            '5️⃣ Trabaja con nosotros\n' +
-            '0️⃣ Volver al inicio\n' +
-            'Escribe en cualquier momento "salir" para finalizar el chat'
-          );
-        } else {
-          await safeSendMessage(client, telefono,
-            '📍 Por favor, selecciona una de nuestras sedes para continuar:\n\n' +
-            '1️⃣ - Para sede 20 de Julio \n' +
-            '2️⃣ - Para sede Venecia'
-          );
-        }
-        return;
-      }
-      
-      // A partir de aquí, el usuario ya aceptó términos y seleccionó sede
-      const currentLocation = userStates[telefono].selectedLocation;
-      
-      addLog('info', `Procesando comando para sede ${currentLocation}: "${text}"`);
-      
-      // MENÚ PRINCIPAL y otras opciones
-      if (text === '1' || text.includes('informacion') || text.includes('información')) {
-        let infoAdicional = '';
-        let estructura = '';
-        if (currentLocation === '20 de Julio') {
-          infoAdicional = '❄️ Ambiente climatizado\n🏃‍♂️ Área de cardio ampliada\n';
-          estructura = '🏢 Nuestra sede cuenta con instalaciones de 3 niveles donde encontraras:\n\n'
-        } else if (currentLocation === 'Venecia') {
-          infoAdicional = '🏍️ Parqueadero para motos y bicicletas gratis\n📱 Aplicación de rutina\n';
-          estructura = '🏢 Nuestra sede cuenta con instalaciones de 5 niveles donde encontraras:\n\n'
-        }
-
+      // PLANES SEDE 20 DE JULIO
+      if (text.includes('motivado') && currentLocation === '20 de Julio') {
+        userStates[telefono].selectedPlan = 'motivado';
+        const pricing = locationPricing[currentLocation].motivado;
         await safeSendMessage(client, telefono,
-          `🏋️‍♂️ *INFORMACIÓN SOBRE GYMBRO - SEDE ${currentLocation.toUpperCase()}* 🏋️‍♀️\n\n` +
-          '✨ *¿Por qué elegir GYMBRO?*\n\n' +
-          estructura +
-          '👨‍🏫 Entrenadores profesionales en planta: Siempre listos para apoyarte.\n' +
-          '🤸‍♀️ Clases grupales incluidas\n' +
-          '💪 Máquinas importadas de última tecnología para maximizar tus resultados.\n' +
-          '🏃‍♂️ Área de cardio y pesas\n' +
-          '🚿 Vestieres amplios y seguros\n' +
-          '🔐 Locker gratis para que entrenes sin preocupaciones.\n' +
-          '🕒 Horarios flexibles\n' +
-          infoAdicional +
-          '📱 Rutina de iniciación personalizada que puedes solicitar cada mes desde nuestra app.\n\n' +
-          'Escribe "menu" para volver al menú principal.'
+          `🔥 *PLAN GYMBRO MOTIVAD@ - SEDE 20 DE JULIO - ${pricing.mensual},000/mes* 🔥\n\n` +
+          pricing.beneficios.join('\n') + '\n\n' +
+          'Escribe "contratar" para proceder\n' +
+          'Escribe "menu" para volver al menú principal'
         );
-
-      } else if (text.includes('membresia') || text.includes('membresía') || text.includes('tarifas') || text.includes('precios') || text === '2') {
-        if (currentLocation === '20 de Julio') {
-          const pricing = locationPricing[currentLocation];
-          await safeSendMessage(client, telefono,
-            `💪 *NUESTRAS MEMBRESÍAS - SEDE ${currentLocation.toUpperCase()}* 💪\n\n` +
-            'Sin costo de inscripción y valoración inicial gratis\n' +
-            'Selecciona escribiendo el tipo:\n\n' +
-            `🔥 *Mes 30 días motivad@* - ${pricing.motivado.mensual},000/mes\n` +
-            '📝 Escribe "motivado" para más info\n\n' +
-            `⚡ *Bimestre firme* - ${pricing.firme.mensual},000\n` +
-            '📝 Escribe "firme" para más info\n\n' +
-            `🏋️ *Trimestre disciplinad@* - ${pricing.disciplinado.mensual},000\n` +
-            '📝 Escribe "disciplinado" para más info\n\n' +
-            `🥇 *Semestre super fitt* - ${pricing.superfitt.mensual},000\n` +
-            '📝 Escribe "superfitt" para más info\n\n' +
-            `👑 *Anualidad pro* - ${pricing.pro.mensual},000\n` +
-            '📝 Escribe "pro" para más info\n\n' +
-            '📲 Escribe "menu" para volver al menú principal.'
-          );
-        } else if (currentLocation === 'Venecia') {
-          const pricing = locationPricing[currentLocation];
-          await safeSendMessage(client, telefono,
-            `💰 *NUESTRAS MEMBRESÍAS - SEDE ${currentLocation.toUpperCase()}* 💰\n\n` +
-            'Sin costo de inscripción y valoración inicial gratis\n' +
-            'Selecciona escribiendo el plan:\n\n' +
-            `⚡ *PLAN GYMBRO FLASH* - ${pricing.flash.mensual},000/mes\n` +
-            '📝 Escribe "flash" para más info\n\n' +
-            `🎓 *PLAN GYMBRO CLASS* - ${pricing.class.mensual},000/mes\n` +
-            '📝 Escribe "class" para más info\n\n' +
-            `🎖 *PLAN GYMBRO ELITE* - ${pricing.elite.mensual},000/mes\n` +
-            '📝 Escribe "elite" para más info\n\n' +
-            `👥 *PLAN ENTRENA CON TU BRO* - ${pricing.bro.mensual},000/mes\n` +
-            '📝 Escribe "bro" para más info\n\n' +
-            `🔄 *PLAN BRO TRIMESTRE* - ${pricing.trimestre.precio},000\n` +
-            '📝 Escribe "trimestre" para más info\n\n' +
-            `📆 *PLAN SEMESTRE BRO* - ${pricing.semestre.precio},000\n` +
-            '📝 Escribe "semestre" para más info\n\n' +
-            'Escribe "menu" para volver al menú principal.'
-          );
-        }
-
-      } else if (text.includes('motivado')) {
-        addLog('info', `Plan motivado solicitado por ${telefono} en sede ${currentLocation}`);
-        if (currentLocation === '20 de Julio') {
-          userStates[telefono].selectedPlan = 'motivado';
-          const pricing = locationPricing[currentLocation].motivado;
-          const beneficios = pricing.beneficios.join('\n');
-          addLog('success', `Enviando info del plan motivado a ${telefono}`);
-          await safeSendMessage(client, telefono,
-            `🔥 *PLAN GYMBRO MOTIVAD@ - SEDE ${currentLocation.toUpperCase()} - ${pricing.mensual},000/mes* 🔥\n\n` +
-            beneficios + '\n\n' +
-            'Escribe "contratar" para proceder\n' +
-            'Escribe "menu" para volver al menú principal'
-          );
-        } else {
-          addLog('warning', `Plan motivado no disponible en ${currentLocation} para ${telefono}`);
-          await safeSendMessage(client, telefono, '❓ Esta membresía no está disponible en la sede Venecia.\n\nEscribe "2" para ver los planes disponibles en esta sede.');
-        }
-        return; // Importante: evitar que caiga en el else final
-
-      } else if (text.includes('firme')) {
-        if (currentLocation === '20 de Julio') {
-          userStates[telefono].selectedPlan = 'firme';
-          const pricing = locationPricing[currentLocation].firme;
-          const beneficios = pricing.beneficios.join('\n');
-          await safeSendMessage(client, telefono,
-            `⚡ *MEMBRESÍA BIMESTRE FIRME - SEDE ${currentLocation.toUpperCase()} - ${pricing.mensual},000* ⚡\n\n` +
-            beneficios + '\n\n' +
-            'Escribe "contratar" para proceder\n' +
-            'Escribe "menu" para volver al menú principal'
-          );
-        } else {
-          await safeSendMessage(client, telefono, '❓ Esta membresía no está disponible en la sede Venecia.\n\nEscribe "2" para ver los planes disponibles.');
-        }
         return;
-
-      } else if (text.includes('disciplinado')) {
-        if (currentLocation === '20 de Julio') {
-          userStates[telefono].selectedPlan = 'disciplinado';
-          const pricing = locationPricing[currentLocation].disciplinado;
-          const beneficios = pricing.beneficios.join('\n');
-          await safeSendMessage(client, telefono,
-            `🏋️ *MEMBRESÍA TRIMESTRE DISCIPLINAD@ - SEDE ${currentLocation.toUpperCase()} - ${pricing.mensual},000* 🏋️\n\n` +
-            beneficios + '\n\n' +
-            'Escribe "contratar" para proceder\n' +
-            'Escribe "menu" para volver al menú principal'
-          );
-        } else {
-          await safeSendMessage(client, telefono, '❓ Esta membresía no está disponible en la sede Venecia.\n\nEscribe "2" para ver los planes disponibles.');
-        }
-
-      } else if (text.includes('superfitt') || text.includes('superfit')) {
-        if (currentLocation === '20 de Julio') {
-          userStates[telefono].selectedPlan = 'superfitt';
-          const pricing = locationPricing[currentLocation].superfitt;
-          const beneficios = pricing.beneficios.join('\n');
-          await safeSendMessage(client, telefono,
-            `🥇 *MEMBRESÍA SEMESTRE SUPER FITT - SEDE ${currentLocation.toUpperCase()} - ${pricing.mensual},000* 🥇\n\n` +
-            beneficios + '\n\n' +
-            'Escribe "contratar" para proceder\n' +
-            'Escribe "menu" para volver al menú principal'
-          );
-        } else {
-          await safeSendMessage(client, telefono, '❓ Esta membresía no está disponible en la sede Venecia.\n\nEscribe "2" para ver los planes disponibles.');
-        }
-
-      } else if (text.includes('pro')) {
-        if (currentLocation === '20 de Julio') {
-          userStates[telefono].selectedPlan = 'pro';
-          const pricing = locationPricing[currentLocation].pro;
-          const beneficios = pricing.beneficios.join('\n');
-          await safeSendMessage(client, telefono,
-            `👑 *MEMBRESÍA ANUALIDAD PRO - SEDE ${currentLocation.toUpperCase()} - ${pricing.mensual},000* 👑\n\n` +
-            beneficios + '\n\n' +
-            'Escribe "contratar" para proceder\n' +
-            'Escribe "menu" para volver al menú principal'
-          );
-        } else {
-          await safeSendMessage(client, telefono, '❓ Esta membresía no está disponible en la sede Venecia.\n\nEscribe "2" para ver los planes disponibles.');
-        }
-
-      } else if (text.includes('flash')) {
-        addLog('info', `Plan flash solicitado por ${telefono} en sede ${currentLocation}`);
-        if (currentLocation === 'Venecia') {
-          userStates[telefono].selectedPlan = 'flash';
-          const pricing = locationPricing[currentLocation].flash;
-          const beneficios = pricing.beneficios.join('\n');
-          addLog('success', `Enviando info del plan flash a ${telefono}`);
-          await safeSendMessage(client, telefono,
-            `⚡ *PLAN GYMBRO FLASH - SEDE ${currentLocation.toUpperCase()} - ${pricing.mensual},000/mes* ⚡\n\n` +
-            beneficios + '\n\n' +
-            'Escribe "contratar" para proceder\n' +
-            'Escribe "menu" para volver al menú principal'
-          );
-        } else {
-          addLog('warning', `Plan flash no disponible en ${currentLocation} para ${telefono}`);
-          await safeSendMessage(client, telefono, '❓ Este plan no está disponible en la sede 20 de Julio.\n\nEscribe "2" para ver las membresías disponibles.');
-        }
+      }
+      
+      if (text.includes('firme') && currentLocation === '20 de Julio') {
+        userStates[telefono].selectedPlan = 'firme';
+        const pricing = locationPricing[currentLocation].firme;
+        await safeSendMessage(client, telefono,
+          `⚡ *MEMBRESÍA BIMESTRE FIRME - SEDE 20 DE JULIO - ${pricing.mensual},000* ⚡\n\n` +
+          pricing.beneficios.join('\n') + '\n\n' +
+          'Escribe "contratar" para proceder\n' +
+          'Escribe "menu" para volver al menú principal'
+        );
         return;
+      }
 
-      } else if (text.includes('class')) {
-        if (currentLocation === 'Venecia') {
-          userStates[telefono].selectedPlan = 'class';
-          const pricing = locationPricing[currentLocation].class;
-          const beneficios = pricing.beneficios.join('\n');
-          await safeSendMessage(client, telefono,
-            `🎓 *PLAN GYMBRO CLASS - SEDE ${currentLocation.toUpperCase()} - ${pricing.mensual},000/mes* 🎓\n\n` +
-            beneficios + '\n\n' +
-            'Escribe "contratar" para proceder\n' +
-            'Escribe "menu" para volver al menú principal'
-          );
-        } else {
-          await safeSendMessage(client, telefono, '❓ Este plan no está disponible en la sede 20 de Julio.\n\nEscribe "2" para ver las membresías disponibles.');
-        }
+      if (text.includes('disciplinado') && currentLocation === '20 de Julio') {
+        userStates[telefono].selectedPlan = 'disciplinado';
+        const pricing = locationPricing[currentLocation].disciplinado;
+        await safeSendMessage(client, telefono,
+          `🏋️ *MEMBRESÍA TRIMESTRE DISCIPLINAD@ - SEDE 20 DE JULIO - ${pricing.mensual},000* 🏋️\n\n` +
+          pricing.beneficios.join('\n') + '\n\n' +
+          'Escribe "contratar" para proceder\n' +
+          'Escribe "menu" para volver al menú principal'
+        );
+        return;
+      }
 
-      } else if (text.includes('elite')) {
-        if (currentLocation === 'Venecia') {
-          userStates[telefono].selectedPlan = 'elite';
-          const pricing = locationPricing[currentLocation].elite;
-          const beneficios = pricing.beneficios.join('\n');
-          await safeSendMessage(client, telefono,
-            `🎖 *PLAN GYMBRO ELITE - SEDE ${currentLocation.toUpperCase()} - ${pricing.mensual},000/mes* 🎖\n\n` +
-            beneficios + '\n\n' +
-            'Escribe "contratar" para proceder\n' +
-            'Escribe "menu" para volver al menú principal'
-          );
-        } else {
-          await safeSendMessage(client, telefono, '❓ Este plan no está disponible en la sede 20 de Julio.\n\nEscribe "2" para ver las membresías disponibles.');
-        }
+      if ((text.includes('superfitt') || text.includes('superfit')) && currentLocation === '20 de Julio') {
+        userStates[telefono].selectedPlan = 'superfitt';
+        const pricing = locationPricing[currentLocation].superfitt;
+        await safeSendMessage(client, telefono,
+          `🥇 *MEMBRESÍA SEMESTRE SUPER FITT - SEDE 20 DE JULIO - ${pricing.mensual},000* 🥇\n\n` +
+          pricing.beneficios.join('\n') + '\n\n' +
+          'Escribe "contratar" para proceder\n' +
+          'Escribe "menu" para volver al menú principal'
+        );
+        return;
+      }
 
-      } else if (text.includes('bro') && !text.includes('trimestre') && !text.includes('semestre')) {
-        if (currentLocation === 'Venecia') {
-          userStates[telefono].selectedPlan = 'bro';
-          const pricing = locationPricing[currentLocation].bro;
-          const beneficios = pricing.beneficios.join('\n');
-          await safeSendMessage(client, telefono,
-            `👥 *PLAN ENTRENA CON TU BRO - SEDE ${currentLocation.toUpperCase()} - ${pricing.mensual},000/mes* 👥\n\n` +
-            beneficios + '\n\n' +
-            'Escribe "contratar" para proceder\n' +
-            'Escribe "menu" para volver al menú principal'
-          );
-        } else {
-          await safeSendMessage(client, telefono, '❓ Este plan no está disponible en la sede 20 de Julio.\n\nEscribe "2" para ver las membresías disponibles.');
-        }
+      if (text.includes('pro') && currentLocation === '20 de Julio') {
+        userStates[telefono].selectedPlan = 'pro';
+        const pricing = locationPricing[currentLocation].pro;
+        await safeSendMessage(client, telefono,
+          `👑 *MEMBRESÍA ANUALIDAD PRO - SEDE 20 DE JULIO - ${pricing.mensual},000* 👑\n\n` +
+          pricing.beneficios.join('\n') + '\n\n' +
+          'Escribe "contratar" para proceder\n' +
+          'Escribe "menu" para volver al menú principal'
+        );
+        return;
+      }
+      
+      // PLANES SEDE VENECIA
+      if (text.includes('flash') && currentLocation === 'Venecia') {
+        userStates[telefono].selectedPlan = 'flash';
+        const pricing = locationPricing[currentLocation].flash;
+        await safeSendMessage(client, telefono,
+          `⚡ *PLAN GYMBRO FLASH - SEDE VENECIA - ${pricing.mensual},000/mes* ⚡\n\n` +
+          pricing.beneficios.join('\n') + '\n\n' +
+          'Escribe "contratar" para proceder\n' +
+          'Escribe "menu" para volver al menú principal'
+        );
+        return;
+      }
 
-      } else if (text.includes('trimestre')) {
-        if (currentLocation === 'Venecia') {
-          userStates[telefono].selectedPlan = 'trimestre';
-          const pricing = locationPricing[currentLocation].trimestre;
-          const beneficios = pricing.beneficios.join('\n');
-          await safeSendMessage(client, telefono,
-            `🔄 *PLAN BRO TRIMESTRE - SEDE ${currentLocation.toUpperCase()} - ${pricing.precio},000* 🔄\n\n` +
-            beneficios + '\n\n' +
-            'Escribe "contratar" para proceder\n' +
-            'Escribe "menu" para volver al menú principal'
-          );
-        } else {
-          await safeSendMessage(client, telefono, '❓ Este plan no está disponible en la sede 20 de Julio.\n\nEscribe "2" para ver las membresías disponibles.');
-        }
+      if (text.includes('class') && currentLocation === 'Venecia') {
+        userStates[telefono].selectedPlan = 'class';
+        const pricing = locationPricing[currentLocation].class;
+        await safeSendMessage(client, telefono,
+          `🎓 *PLAN GYMBRO CLASS - SEDE VENECIA - ${pricing.mensual},000/mes* 🎓\n\n` +
+          pricing.beneficios.join('\n') + '\n\n' +
+          'Escribe "contratar" para proceder\n' +
+          'Escribe "menu" para volver al menú principal'
+        );
+        return;
+      }
 
-      } else if (text.includes('semestre')) {
-        if (currentLocation === 'Venecia') {
-          userStates[telefono].selectedPlan = 'semestre';
-          const pricing = locationPricing[currentLocation].semestre;
-          const beneficios = pricing.beneficios.join('\n');
-          await safeSendMessage(client, telefono,
-            `📆 *PLAN SEMESTRE BRO - SEDE ${currentLocation.toUpperCase()} - ${pricing.precio},000* 📆\n\n` +
-            beneficios + '\n\n' +
-            'Escribe "contratar" para proceder\n' +
-            'Escribe "menu" para volver al menú principal'
-          );
-        } else {
-          await safeSendMessage(client, telefono, '❓ Este plan no está disponible en la sede 20 de Julio.\n\nEscribe "2" para ver las membresías disponibles.');
-        }
+      if (text.includes('elite') && currentLocation === 'Venecia') {
+        userStates[telefono].selectedPlan = 'elite';
+        const pricing = locationPricing[currentLocation].elite;
+        await safeSendMessage(client, telefono,
+          `🎖 *PLAN GYMBRO ELITE - SEDE VENECIA - ${pricing.mensual},000/mes* 🎖\n\n` +
+          pricing.beneficios.join('\n') + '\n\n' +
+          'Escribe "contratar" para proceder\n' +
+          'Escribe "menu" para volver al menú principal'
+        );
+        return;
+      }
 
-      } else if (text.includes('contratar') || userStates[telefono].contratarState === 'waitingForPaymentMethod') {
+      if (text.includes('bro') && !text.includes('trimestre') && !text.includes('semestre') && currentLocation === 'Venecia') {
+        userStates[telefono].selectedPlan = 'bro';
+        const pricing = locationPricing[currentLocation].bro;
+        await safeSendMessage(client, telefono,
+          `👥 *PLAN ENTRENA CON TU BRO - SEDE VENECIA - ${pricing.mensual},000/mes* 👥\n\n` +
+          pricing.beneficios.join('\n') + '\n\n' +
+          'Escribe "contratar" para proceder\n' +
+          'Escribe "menu" para volver al menú principal'
+        );
+        return;
+      }
+
+      if (text.includes('trimestre') && currentLocation === 'Venecia') {
+        userStates[telefono].selectedPlan = 'trimestre';
+        const pricing = locationPricing[currentLocation].trimestre;
+        await safeSendMessage(client, telefono,
+          `🔄 *PLAN BRO TRIMESTRE - SEDE VENECIA - ${pricing.precio},000* 🔄\n\n` +
+          pricing.beneficios.join('\n') + '\n\n' +
+          'Escribe "contratar" para proceder\n' +
+          'Escribe "menu" para volver al menú principal'
+        );
+        return;
+      }
+
+      if (text.includes('semestre') && currentLocation === 'Venecia') {
+        userStates[telefono].selectedPlan = 'semestre';
+        const pricing = locationPricing[currentLocation].semestre;
+        await safeSendMessage(client, telefono,
+          `📆 *PLAN SEMESTRE BRO - SEDE VENECIA - ${pricing.precio},000* 📆\n\n` +
+          pricing.beneficios.join('\n') + '\n\n' +
+          'Escribe "contratar" para proceder\n' +
+          'Escribe "menu" para volver al menú principal'
+        );
+        return;
+      }
+
+      // FLUJO DE CONTRATACIÓN COMPLETO
+      if (text.includes('contratar') || userStates[telefono].contratarState === 'waitingForPaymentMethod') {
         const planSolicitado = text.split('contratar')[1]?.trim();
 
         if (planSolicitado && userStates[telefono].contratarState === 'initial') {
@@ -1444,36 +1302,61 @@ function setupMessageHandlers(client) {
           }
 
           userStates[telefono].selectedPlan = null;
+          return;
         } else {
           await safeSendMessage(client, telefono, '❓ No pudimos identificar el plan que deseas contratar.\n\nEscribe "2" para volver a ver nuestras membresías.');
+          return;
         }
-
-      } else if (text === 'menu' || text === '0' || text === 'menú') {
+      }
+      
+      // Información del gimnasio
+      if (text === '1' || text.includes('informacion')) {
+        let infoExtra = currentLocation === '20 de Julio' ? 
+          '❄️ Ambiente climatizado\n🏃‍♂️ Área de cardio ampliada\n' :
+          '🏍️ Parqueadero gratis\n📱 App de rutinas\n';
+          
+        await safeSendMessage(client, telefono,
+          `🏋️‍♂️ *INFORMACIÓN GYMBRO - ${currentLocation.toUpperCase()}* 🏋️‍♀️\n\n` +
+          '✨ *¿Por qué elegir GYMBRO?*\n\n' +
+          '👨‍🏫 Entrenadores profesionales\n' +
+          '💪 Máquinas de última tecnología\n' +
+          '🚿 Vestuarios amplios y seguros\n' +
+          infoExtra +
+          '📱 Rutinas personalizadas\n\n' +
+          'Escribe "menu" para volver al menú principal.'
+        );
+        return;
+      }
+      
+      // Membresías y tarifas
+      if (text === '2' || text.includes('membresia')) {
         if (currentLocation === '20 de Julio') {
           await safeSendMessage(client, telefono,
-            '🏋️‍♂️ *MENÚ PRINCIPAL - SEDE 20 DE JULIO* 🏋️‍♀️\n\n' +
-            'Escribe el número de tu opción:\n\n' +
-            '1️⃣ Información sobre nuestro gimnasio\n' +
-            '2️⃣ Membresías y tarifas\n' +
-            '3️⃣ Sedes y horarios\n' +
-            '4️⃣ Horarios clases grupales\n' +
-            '5️⃣ Trabaja con nosotros\n' +
-            '0️⃣ Volver al inicio'
+            `💪 *MEMBRESÍAS - SEDE 20 DE JULIO* 💪\n\n` +
+            '🔥 *Mes motivad@* - 66,000/mes - Escribe "motivado"\n' +
+            '⚡ *Bimestre firme* - 125,000 - Escribe "firme"\n' +
+            '🏋️ *Trimestre disciplinad@* - 177,000 - Escribe "disciplinado"\n' +
+            '🥇 *Semestre super fitt* - 336,000 - Escribe "superfitt"\n' +
+            '👑 *Anualidad pro* - 630,000 - Escribe "pro"\n\n' +
+            'Escribe "menu" para volver al menú principal.'
           );
         } else {
           await safeSendMessage(client, telefono,
-            '🏋️‍♂️ *MENÚ PRINCIPAL - SEDE VENECIA* 🏋️‍♀️\n\n' +
-            'Escribe el número de tu opción:\n\n' +
-            '1️⃣ Información sobre nuestro gimnasio\n' +
-            '2️⃣ Membresías y tarifas\n' +
-            '3️⃣ Sedes y horarios\n' +
-            '4️⃣ Horarios clases grupales\n' +
-            '5️⃣ Trabaja con nosotros\n' +
-            '0️⃣ Volver al inicio'
+            `💰 *MEMBRESÍAS - SEDE VENECIA* 💰\n\n` +
+            '⚡ *FLASH* - 70,000/mes - Escribe "flash"\n' +
+            '🎓 *CLASS* - 55,000/mes - Escribe "class"\n' +
+            '🎖 *ELITE* - 55,000/mes - Escribe "elite"\n' +
+            '👥 *ENTRENA CON TU BRO* - 130,000/mes - Escribe "bro"\n' +
+            '🔄 *TRIMESTRE* - 185,000 - Escribe "trimestre"\n' +
+            '📆 *SEMESTRE* - 340,000 - Escribe "semestre"\n\n' +
+            'Escribe "menu" para volver al menú principal.'
           );
         }
-
-      } else if (text === '3' || text.includes('sede') || text.includes('horario')) {
+        return;
+      }
+      
+      // OPCIONES DE MENÚ COMPLETAS
+      if (text === '3' || text.includes('sede') || text.includes('horario')) {
         await safeSendMessage(client, telefono,
           '📍 *Horarios y Sedes GYMBRO* 🕒\n\n' +
           '*Sede 20 de Julio*\n' +
@@ -1484,8 +1367,10 @@ function setupMessageHandlers(client) {
           '🕐 Horario: Lunes a viernes 5am - 10pm / Sábados 7am - 5pm / Domingos 8am - 4pm\n\n' +
           'Escribe "menu" para volver al menú principal.'
         );
+        return;
+      }
 
-      } else if (text === '4') {
+      if (text === '4') {
         await safeSendMessage(client, telefono,
           '📅 *Horarios de Clases Grupales*\n\n' +
           '🕐 Lunes a Viernes:\n' +
@@ -1494,46 +1379,79 @@ function setupMessageHandlers(client) {
           '💪 Te esperamos para entrenar juntos y mantener la energía al 100%.\n\n' +
           'Escribe *"menu"* para regresar al menú principal.'
         );
+        return;
+      }
 
-      } else if (text === '5') {
+      if (text === '5') {
         await safeSendMessage(client, telefono,
           '🙌 ¡Qué alegría que quieras hacer parte de nuestra familia GYMBRO!\n\n' +
           '📄 Si estás interesado en trabajar con nosotros, envíanos tu hoja de vida al siguiente número de WhatsApp: +57 318 6196126.\n\n' +
           'Te contactaremos si hay una vacante que se ajuste a tu perfil.\n\n' +
           'Escribe *"menu"* para regresar al menú principal.'
         );
+        return;
+      }
 
-      } else if (text.includes('permanencia') || text.includes('atadura') || text.includes('amarrado')) {
+      // COMANDOS ESPECIALES
+      if (text.includes('permanencia') || text.includes('atadura') || text.includes('amarrado')) {
         await safeSendMessage(client, telefono,
           '💪 ¡En GYMBRO no tenemos ninguna atadura! Puedes cancelar tu membresía cuando lo desees. Queremos que te quedes porque amas entrenar, no por obligación.\n\n' +
           'Escribe "menu" para volver al menú principal o consulta alguna otra opción.'
         );
+        return;
+      }
 
-      } else if (text.includes('asesor')) {
+      if (text.includes('asesor')) {
         userStates[telefono].redirigiendoAsesor = true;
         await safeSendMessage(client, telefono,
           '💬 Te estoy redirigiendo a un asesor. Por favor, espera en línea. Un asesor humano continuará la conversación contigo.'
         );
         return;
+      }
 
-      } else if (text.includes('inscripcion') || text.includes('inscripción') || text.includes('registro')) {
+      if (text.includes('inscripcion') || text.includes('inscripción') || text.includes('registro')) {
         await safeSendMessage(client, telefono,
           '💪 ¡En GYMBRO no cobramos inscripción! Queremos que hagas parte de nuestra familia fitness. Puedes adquirir tu membresía cuando lo desees o acercarte a conocer nuestras instalaciones sin compromiso. ¡Te esperamos!\n\n' +
           'Realiza tu inscripción aquí: Registro GYMBRO 👉 https://aplicacion.gymbrocolombia.com/registro/add\n\n' +
           'Escribe "menu" para volver al menú principal.'
         );
-
-      } else {
-        addLog('warning', `Mensaje no reconocido de ${telefono}: "${text}" en sede ${currentLocation}`);
-        addLog('info', `Estado usuario: términos=${userStates[telefono].acceptedTerms}, sede=${userStates[telefono].selectedLocation}`);
-        await safeSendMessage(client, telefono,
-          '🤖 No entendí tu mensaje. Por favor selecciona una opción válida o escribe "menu" para volver al inicio.\n\n' +
-          'Comandos disponibles:\n' +
-          '• "menu" - Menú principal\n' +
-          '• "asesor" - Hablar con humano\n' +
-          '• "salir" - Finalizar chat\n'
-        );
+        return;
       }
+
+      // Validación de planes no disponibles en sede incorrecta
+      if (text.includes('motivado') && currentLocation === 'Venecia') {
+        await safeSendMessage(client, telefono, '❓ Esta membresía no está disponible en la sede Venecia.\n\nEscribe "2" para ver los planes disponibles en esta sede.');
+        return;
+      }
+
+      if ((text.includes('flash') || text.includes('class') || text.includes('elite') || text.includes('bro') || text.includes('trimestre') || text.includes('semestre')) && currentLocation === '20 de Julio') {
+        await safeSendMessage(client, telefono, '❓ Este plan no está disponible en la sede 20 de Julio.\n\nEscribe "2" para ver las membresías disponibles.');
+        return;
+      }
+
+      // Menú principal
+      if (text === 'menu' || text === '0') {
+        await safeSendMessage(client, telefono,
+          `🏋️‍♂️ *MENÚ PRINCIPAL - ${currentLocation.toUpperCase()}* 🏋️‍♀️\n\n` +
+          '1️⃣ Información sobre nuestro gimnasio\n' +
+          '2️⃣ Membresías y tarifas\n' +
+          '3️⃣ Sedes y horarios\n' +
+          '4️⃣ Horarios clases grupales\n' +
+          '5️⃣ Trabaja con nosotros\n' +
+          '0️⃣ Volver al inicio'
+        );
+        return;
+      }
+      
+      // Mensaje por defecto
+      await safeSendMessage(client, telefono,
+        '🤖 No entendí tu mensaje. Escribe "menu" para ver las opciones disponibles.\n\n' +
+        'Comandos útiles:\n' +
+        '• "menu" - Menú principal\n' +
+        '• "asesor" - Hablar con humano\n' +
+        '• "test" - Probar bot\n' +
+        '• "salir" - Finalizar chat'
+      );
       
       // Guardar interacción en base de datos
       try {
@@ -1549,8 +1467,8 @@ function setupMessageHandlers(client) {
       }
       
     } catch (error) {
-      addLog('error', 'Error al procesar mensaje: ' + error.message);
-      await safeSendMessage(client, telefono, '⚠️ Ocurrió un error al procesar tu mensaje. Intenta de nuevo.');
+      addLog('error', `Error procesando mensaje: ${error.message}`);
+      await safeSendMessage(client, telefono, '⚠️ Ocurrió un error. Intenta escribir "test" para verificar que el bot funciona.');
     }
   });
 }
