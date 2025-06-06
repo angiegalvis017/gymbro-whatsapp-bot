@@ -22,8 +22,8 @@ const userStates = {};
 // Configuración
 const MAX_RECONNECT_ATTEMPTS = 10;
 const RECONNECT_DELAYS = [5000, 10000, 15000, 30000, 60000];
-const INACTIVITY_TIMEOUT = 5 * 60 * 1000;
-const CLEANUP_INTERVAL = 2 * 60 * 1000;
+const INACTIVITY_TIMEOUT = 15 * 60 * 1000;
+const CLEANUP_INTERVAL = 1 * 60 * 1000;
 
 // Middleware
 app.use(express.json());
