@@ -6,6 +6,9 @@ require('dotenv').config();
 const express = require('express');
 const qrcode = require('qrcode');
 
+// Configuración de memoria para Node.js
+process.env.NODE_OPTIONS = '--max-old-space-size=256';
+
 // Configuración del servidor
 const SERVER_PORT = process.env.PORT || 3000;
 const app = express();
@@ -19,35 +22,40 @@ let botLogs = [];
 let reconnectAttempts = 0;
 const userStates = {};
 
-// Configuración
-const MAX_RECONNECT_ATTEMPTS = 10;
-const RECONNECT_DELAYS = [5000, 10000, 15000, 30000, 60000];
-const INACTIVITY_TIMEOUT = 5 * 60 * 1000;
-const CLEANUP_INTERVAL = 2 * 60 * 1000;
+// Configuración optimizada para Render
+const MAX_RECONNECT_ATTEMPTS = 5;
+const RECONNECT_DELAYS = [5000, 15000, 30000];
+const INACTIVITY_TIMEOUT = 3 * 60 * 1000; // 3 minutos
+const CLEANUP_INTERVAL = 1 * 60 * 1000; // 1 minuto
 
 // Middleware
 app.use(express.json());
 
-// Auto-ping para mantener servicio vivo
+// Auto-ping optimizado para mantener servicio vivo
 if (process.env.RENDER_EXTERNAL_URL) {
   setInterval(async () => {
     try {
       const response = await fetch(`${process.env.RENDER_EXTERNAL_URL}/health`);
-      addLog('info', 'Auto-ping: ' + (response.status === 200 ? 'OK' : 'ERROR'));
+      // Solo logear errores para reducir logs
+      if (response.status !== 200) {
+        addLog('warning', 'Auto-ping ERROR');
+      }
     } catch (error) {
       addLog('warning', 'Auto-ping error: ' + error.message);
     }
-  }, 180000);
+  }, 240000); // Cada 4 minutos en lugar de 3
 }
 
-// Configuración de base de datos
+// Configuración de base de datos optimizada
 const pool = mysql.createPool({
   host: process.env.DB_HOST || 'cpanel.gymbrocolombia.com',
   user: process.env.DB_USER || 'gymbroco_angie',
   password: process.env.DB_PASSWORD || '24Nov2015',
   database: process.env.DB_NAME || 'gymbroco_whatsappbot',
   waitForConnections: true,
-  connectionLimit: 5
+  connectionLimit: 2, // Reducido para ahorrar memoria
+  acquireTimeout: 60000,
+  timeout: 60000
 });
 
 // Precios y configuraciones por ubicación
@@ -174,7 +182,7 @@ const locationPricing = {
   }
 };
 
-// Función para agregar logs al dashboard
+// Función para agregar logs al dashboard (optimizada)
 function addLog(type, message) {
   const log = {
     timestamp: new Date().toISOString(),
@@ -184,8 +192,9 @@ function addLog(type, message) {
   
   botLogs.unshift(log);
   
-  if (botLogs.length > 100) {
-    botLogs = botLogs.slice(0, 100);
+  // Mantener solo 20 logs en memoria para ahorrar RAM
+  if (botLogs.length > 20) {
+    botLogs = botLogs.slice(0, 20);
   }
   
   console.log(`[${type.toUpperCase()}] ${message}`);
@@ -727,10 +736,10 @@ async function testDatabaseConnection() {
 async function safeSendMessage(client, to, message) {
   try {
     await client.sendMessage(to, message);
-    addLog('success', `✅ Enviado a ${to.substring(0, 15)}...`);
+    // Solo logear errores para ahorrar memoria
     return true;
   } catch (error) {
-    addLog('error', `❌ Error enviando a ${to}: ${error.message}`);
+    addLog('error', `❌ Error enviando: ${error.message}`);
     return false;
   }
 }
@@ -818,16 +827,13 @@ async function cleanupInactiveUsers(client) {
     const now = Date.now();
     let cleanedUsers = 0;
     
-    addLog('info', `Iniciando limpieza de usuarios inactivos... (${Object.keys(userStates).length} usuarios activos)`);
-    
+    // Limpiar usuarios inactivos más agresivamente para ahorrar memoria
     for (const phone in userStates) {
       const state = userStates[phone];
       const inactiveFor = now - state.lastInteraction;
-      const inactiveMinutes = Math.floor(inactiveFor / (60 * 1000));
-      
-      addLog('info', `Usuario ${phone}: inactivo por ${inactiveMinutes} minutos`);
       
       if (inactiveFor > INACTIVITY_TIMEOUT) {
+        // Intentar guardar en BD pero no bloquear si falla
         try {
           const dbConnected = await testDatabaseConnection();
           if (dbConnected) {
@@ -835,36 +841,25 @@ async function cleanupInactiveUsers(client) {
               'INSERT INTO interacciones (telefono, plan_interesado, ultima_interaccion) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE plan_interesado = ?, ultima_interaccion = ?',
               [phone, state.selectedPlan || null, new Date(state.lastInteraction), state.selectedPlan || null, new Date(state.lastInteraction)]
             );
-            addLog('success', `Estado de ${phone} guardado en BD`);
           }
         } catch (error) {
-          addLog('error', `Error guardando estado: ${error.message}`);
+          // Silenciar errores de BD para no saturar logs
         }
         
-        const sent = await safeSendMessage(client, phone, 
-          '⏳ Finalizamos el chat por inactividad. ¡Gracias por tu interés en GYMBRO! 💪\n\n' +
-          'Escribe cualquier mensaje para iniciar nuevamente.'
-        );
-        
-        if (sent) {
-          addLog('success', `Mensaje de inactividad enviado a ${phone}`);
-        }
-        
+        // Eliminar directamente sin enviar mensaje para ahorrar recursos
         delete userStates[phone];
         cleanedUsers++;
-        addLog('success', `Usuario ${phone} eliminado por inactividad (${inactiveMinutes} minutos)`);
-        
-        await new Promise(resolve => setTimeout(resolve, 1000));
       }
     }
     
     if (cleanedUsers > 0) {
-      addLog('success', `Limpieza completada: ${cleanedUsers} usuarios eliminados por inactividad`);
-    } else {
-      addLog('info', 'Limpieza completada: Todos los usuarios están activos');
+      addLog('info', `Limpieza: ${cleanedUsers} usuarios eliminados`);
     }
     
-    addLog('info', `Usuarios activos restantes: ${Object.keys(userStates).length}`);
+    // Forzar garbage collection si está disponible
+    if (global.gc) {
+      global.gc();
+    }
     
   } catch (error) {
     addLog('error', 'Error en limpieza: ' + error.message);
@@ -906,7 +901,10 @@ function setupMessageHandlers(client) {
       const telefono = message.from;
       const text = message.body.toLowerCase().trim();
       
-      addLog('info', `📩 ${telefono}: "${text}"`);
+      // Solo logear mensajes importantes para ahorrar memoria
+      if (text === 'test' || text === 'hola' || text === 'acepto' || text.includes('contratar')) {
+        addLog('info', `📩 ${telefono.substring(0, 15)}: "${text}"`);
+      }
       
       if (userStates[telefono]?.redirigiendoAsesor) {
         addLog('info', `🚫 Mensaje ignorado (asesor humano): ${telefono}`);
@@ -956,7 +954,7 @@ function setupMessageHandlers(client) {
       if (!userStates[telefono].acceptedTerms) {
         if (text === 'acepto') {
           userStates[telefono].acceptedTerms = true;
-          addLog('success', `✅ ${telefono} aceptó términos`);
+          addLog('success', `✅ Términos aceptados: ${telefono.substring(0, 15)}`);
           await safeSendMessage(client, telefono,
             '🏋️‍♂️ ¡Hola, hablas con GABRIELA tu asistente virtual bienvenido a GYMBRO! 🏋️‍♀️\n\n' +
             '¿En cuál de nuestras sedes te encuentras interesad@?\n\n' +
@@ -969,7 +967,6 @@ function setupMessageHandlers(client) {
         }
         
         // Cualquier mensaje cuando no ha aceptado términos
-        addLog('info', `❓ ${telefono} necesita aceptar términos`);
         await safeSendMessage(client, telefono,
           '👋 ¡Hola! Soy el asistente virtual de *GYMBRO* 💪\n\n' +
           'Para comenzar, necesito que aceptes el tratamiento de tus datos personales según nuestra política de privacidad.\n\n' +
@@ -982,7 +979,7 @@ function setupMessageHandlers(client) {
       if (!userStates[telefono].selectedLocation) {
         if (text === '1' || text.includes('julio')) {
           userStates[telefono].selectedLocation = '20 de Julio';
-          addLog('success', `🏢 ${telefono} seleccionó 20 de Julio`);
+          addLog('success', `🏢 Sede 20 de Julio: ${telefono.substring(0, 15)}`);
           await safeSendMessage(client, telefono,
             '📍 *SEDE 20 DE JULIO* 📍\n\n' +
             'Nuestra sede en 20 de Julio está equipada con lo último en tecnología y personal capacitado.\n\n' +
@@ -1001,7 +998,7 @@ function setupMessageHandlers(client) {
         
         if (text === '2' || text.includes('venecia')) {
           userStates[telefono].selectedLocation = 'Venecia';
-          addLog('success', `🏢 ${telefono} seleccionó Venecia`);
+          addLog('success', `🏢 Sede Venecia: ${telefono.substring(0, 15)}`);
           await safeSendMessage(client, telefono,
             '📍 *SEDE VENECIA* 📍\n\n' +
             'Nuestra sede en Venecia está diseñada para que puedas entrenar cómodo y seguro.\n\n' +
@@ -1029,7 +1026,6 @@ function setupMessageHandlers(client) {
       
       // A partir de aquí, el usuario ya seleccionó sede
       const currentLocation = userStates[telefono].selectedLocation;
-      addLog('info', `💬 ${telefono} en ${currentLocation}: "${text}"`);
       
       // Manejo de experiencias y seguimiento
       if (text === 'sí' || text === 'si') {
@@ -1473,10 +1469,10 @@ function setupMessageHandlers(client) {
   });
 }
 
-// Función principal de inicialización
+// Función principal de inicialización optimizada
 async function initializeBot() {
   try {
-    addLog('info', 'Iniciando bot con WhatsApp-Web.js...');
+    addLog('info', 'Iniciando bot optimizado para Render...');
     
     const client = new Client({
       authStrategy: new LocalAuth({
@@ -1491,7 +1487,17 @@ async function initializeBot() {
           '--disable-accelerated-2d-canvas',
           '--no-first-run',
           '--no-zygote',
-          '--disable-gpu'
+          '--disable-gpu',
+          '--disable-web-security',
+          '--disable-features=VizDisplayCompositor',
+          '--disable-extensions',
+          '--disable-default-apps',
+          '--disable-sync',
+          '--disable-background-timer-throttling',
+          '--disable-backgrounding-occluded-windows',
+          '--disable-renderer-backgrounding',
+          '--memory-pressure-off',
+          '--max_old_space_size=256' // Limitar memoria de V8
         ]
       }
     });
@@ -1528,34 +1534,30 @@ async function initializeBot() {
     await testDatabaseConnection();
     setupMessageHandlers(client);
     
-    // Ping cada minuto
+    // Ping menos frecuente para ahorrar recursos
     setInterval(async () => {
       try {
         if (clientReady && globalClient) {
           const state = await globalClient.getState();
           if (state !== 'CONNECTED') {
-            addLog('error', `WhatsApp estado: ${state}, reconectando...`);
             clientReady = false;
             scheduleReconnect();
-          } else {
-            addLog('info', 'WhatsApp OK');
           }
         }
       } catch (error) {
-        addLog('error', 'Error en ping: ' + error.message);
         clientReady = false;
         scheduleReconnect();
       }
-    }, 60000);
+    }, 120000); // Cada 2 minutos
 
-    // Verificar usuarios inactivos cada hora
+    // Verificar usuarios inactivos menos frecuentemente
     setInterval(() => {
       if (clientReady && globalClient) {
         checkInactiveUsers(globalClient);
       }
-    }, 60 * 60 * 1000);
+    }, 2 * 60 * 60 * 1000); // Cada 2 horas
 
-    // Limpiar usuarios inactivos
+    // Limpiar usuarios inactivos más frecuentemente
     setInterval(async () => {
       if (clientReady && globalClient) {
         await cleanupInactiveUsers(globalClient);
@@ -1583,17 +1585,43 @@ process.on('unhandledRejection', async (reason) => {
   await sendAlert(`Promesa rechazada: ${reason}`);
 });
 
-// Monitoreo de memoria
+// Monitoreo de memoria optimizado para Render
 setInterval(() => {
   const used = process.memoryUsage();
-  addLog('info', `Memoria: ${Math.round(used.heapUsed / 1024 / 1024)}MB / Usuarios: ${Object.keys(userStates).length}`);
+  const heapUsedMB = Math.round(used.heapUsed / 1024 / 1024);
   
-  if (used.heapUsed > 1024 * 1024 * 1024) {
-    addLog('error', 'Uso de memoria alto, reiniciando...');
-    sendAlert('Reiniciando por uso alto de memoria');
+  // Solo logear cada 10 minutos para reducir logs
+  if (Date.now() % 600000 < 60000) {
+    addLog('info', `Memoria: ${heapUsedMB}MB / Usuarios: ${Object.keys(userStates).length}`);
+  }
+  
+  // Limpiar usuarios si la memoria está alta (300MB límite para Render free tier)
+  if (heapUsedMB > 250) {
+    addLog('warning', 'Memoria alta, limpiando usuarios...');
+    // Limpiar usuarios inactivos inmediatamente
+    const now = Date.now();
+    let cleaned = 0;
+    for (const phone in userStates) {
+      if (now - userStates[phone].lastInteraction > 60000) { // 1 minuto
+        delete userStates[phone];
+        cleaned++;
+      }
+    }
+    addLog('info', `Limpieza de emergencia: ${cleaned} usuarios eliminados`);
+    
+    // Forzar garbage collection si está disponible
+    if (global.gc) {
+      global.gc();
+    }
+  }
+  
+  // Reiniciar si se excede el límite crítico
+  if (heapUsedMB > 400) {
+    addLog('error', 'Límite de memoria crítico alcanzado, reiniciando...');
+    sendAlert('Reiniciando por límite de memoria crítico');
     process.exit(1);
   }
-}, 300000);
+}, 30000); // Verificar cada 30 segundos
 
 // Iniciar servidor
 app.listen(SERVER_PORT, () => {
