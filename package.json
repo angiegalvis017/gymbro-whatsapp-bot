@@ -1,24 +1,23 @@
 {
   "name": "gymbro-whatsapp-bot",
   "version": "1.0.0",
-  "description": "Bot de WhatsApp para GYMBRO con Dashboard Administrativo",
+  "description": "Bot de WhatsApp para GYMBRO con Dashboard - WhatsApp-Web.js",
   "main": "gymbro-bot-completo.js",
   "scripts": {
     "start": "node gymbro-bot-completo.js",
     "dev": "node gymbro-bot-completo.js",
-    "build": "echo 'No build needed'",
-    "postinstall": "echo 'Installation complete'"
+    "build": "echo 'No build needed'"
   },
   "engines": {
     "node": ">=18.0.0"
   },
   "dependencies": {
-    "venom-bot": "^5.3.0",
+    "whatsapp-web.js": "^1.23.0",
+    "qrcode": "^1.5.3",
     "express": "^4.18.2",
     "mysql2": "^3.6.5",
     "dotenv": "^16.3.1"
   },
-  "devDependencies": {},
   "repository": {
     "type": "git",
     "url": "https://github.com/angiegalvis017/gymbro-whatsapp-bot"
@@ -27,7 +26,7 @@
     "whatsapp",
     "bot",
     "gymbro",
-    "venom-bot",
+    "whatsapp-web.js",
     "nodejs"
   ],
   "author": "GYMBRO",
