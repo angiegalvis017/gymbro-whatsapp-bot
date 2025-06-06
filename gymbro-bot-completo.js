@@ -893,7 +893,7 @@ function scheduleReconnect() {
   }, delay);
 }
 
-// ========== CONFIGURACIÓN COMPLETA DE MENSAJES ========== //
+// ========== CONFIGURACIÓN COMPLETA DE MENSAJES ARREGLADA ========== //
 
 function setupMessageHandlers(client) {
   client.on('message', async (message) => {
@@ -922,7 +922,8 @@ function setupMessageHandlers(client) {
           contratarState: 'initial',
           lastInteraction: Date.now(),
           waitingForExperience: false,
-          redirigiendoAsesor: false
+          redirigiendoAsesor: false,
+          followUpState: null // Para manejar seguimientos
         };
         addLog('info', `🆕 Nuevo usuario: ${telefono}`);
       }
@@ -941,50 +942,55 @@ function setupMessageHandlers(client) {
         return;
       }
 
-      // Manejo de experiencias y seguimiento (del código original)
-      if (text === 'sí' || text === 'si') {
-        const dbConnected = await testDatabaseConnection();
-        if (dbConnected) {
-          await pool.query(`
-            UPDATE interacciones
-            SET contratado = TRUE, fecha_contratacion = NOW(),
-            fecha_ultimo_seguimiento_bimestral = NOW()
-            WHERE telefono = ?
-          `, [telefono]);
+      // MANEJO ESPECÍFICO DE SEGUIMIENTOS - Solo si están en estado de seguimiento
+      if (userStates[telefono].followUpState === 'waiting_contract_confirmation') {
+        if (text === 'sí' || text === 'si') {
+          const dbConnected = await testDatabaseConnection();
+          if (dbConnected) {
+            await pool.query(`
+              UPDATE interacciones
+              SET contratado = TRUE, fecha_contratacion = NOW(),
+              fecha_ultimo_seguimiento_bimestral = NOW()
+              WHERE telefono = ?
+            `, [telefono]);
+          }
+
+          userStates[telefono].waitingForExperience = true;
+          userStates[telefono].followUpState = null;
+          await safeSendMessage(client, telefono, '🎉 ¡Genial! ¿Podrías contarnos cómo ha sido tu experiencia con GYMBRO hasta ahora? 💬');
+          return;
+
+        } else if (text === 'no') {
+          userStates[telefono].followUpState = null;
+          await safeSendMessage(client, telefono, '✅ Gracias por tu respuesta. Si necesitas ayuda para iniciar tu plan, estamos disponibles.');
+          return;
         }
-
-        userStates[telefono].waitingForExperience = true;
-        await safeSendMessage(client, telefono, '🎉 ¡Genial! ¿Podrías contarnos cómo ha sido tu experiencia con GYMBRO hasta ahora? 💬');
-        return;
-
-      } else if (text === 'no') {
-        await safeSendMessage(client, telefono, '✅ Gracias por tu respuesta. Si necesitas ayuda para iniciar tu plan, estamos disponibles.');
-        return;
       }
 
-      // Manejo de experiencias
-      if (text === 'bien' || text === 'mal') {
-        const dbConnected = await testDatabaseConnection();
-        if (dbConnected) {
-          await pool.query(`UPDATE interacciones SET experiencia = ? WHERE telefono = ?`, [text, telefono]);
+      // Manejo de experiencias - Solo si están esperando experiencia
+      if (userStates[telefono].waitingForExperience) {
+        if (text === 'bien' || text === 'mal') {
+          const dbConnected = await testDatabaseConnection();
+          if (dbConnected) {
+            await pool.query(`UPDATE interacciones SET experiencia = ? WHERE telefono = ?`, [text, telefono]);
+          }
+
+          await safeSendMessage(client, telefono, '🙏 ¡Gracias por elegirnos! Tus comentarios nos ayudan a mejorar cada día. 💬💪\n\nEstamos siempre para ayudarte.\n\n👋 ¡Hasta pronto!');
+          delete userStates[telefono];
+          return;
         }
 
-        await safeSendMessage(client, telefono, '🙏 ¡Gracias por elegirnos! Tus comentarios nos ayudan a mejorar cada día. 💬💪\n\nEstamos siempre para ayudarte.\n\n👋 ¡Hasta pronto!');
-        delete userStates[telefono];
-        return;
-      }
+        // Capturar experiencia detallada
+        if (text.includes('bien') || text.includes('excelente') || text.includes('mala') || text.length > 3) {
+          const dbConnected = await testDatabaseConnection();
+          if (dbConnected) {
+            await pool.query(`UPDATE interacciones SET experiencia = ? WHERE telefono = ?`, [text, telefono]);
+          }
 
-      // Capturar experiencia detallada
-      if (userStates[telefono].waitingForExperience &&
-        (text.includes('bien') || text.includes('excelente') || text.includes('mala') || text.length > 3)) {
-        const dbConnected = await testDatabaseConnection();
-        if (dbConnected) {
-          await pool.query(`UPDATE interacciones SET experiencia = ? WHERE telefono = ?`, [text, telefono]);
+          await safeSendMessage(client, telefono, '🙏 ¡Gracias por elegirnos! Tus comentarios nos ayudan a mejorar cada día. 💬💪\n\nEstamos siempre para ayudarte.\n\n👋 ¡Hasta pronto!');
+          delete userStates[telefono];
+          return;
         }
-
-        await safeSendMessage(client, telefono, '🙏 ¡Gracias por elegirnos! Tus comentarios nos ayudan a mejorar cada día. 💬💪\n\nEstamos siempre para ayudarte.\n\n👋 ¡Hasta pronto!');
-        delete userStates[telefono];
-        return;
       }
       
       // PASO 1: Aceptación de términos
