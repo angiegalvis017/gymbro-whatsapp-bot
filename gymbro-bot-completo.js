@@ -6,9 +6,6 @@ require('dotenv').config();
 const express = require('express');
 const qrcode = require('qrcode');
 
-// Configuración de memoria para Node.js
-process.env.NODE_OPTIONS = '--max-old-space-size=256';
-
 // Configuración del servidor
 const SERVER_PORT = process.env.PORT || 3000;
 const app = express();
@@ -22,40 +19,35 @@ let botLogs = [];
 let reconnectAttempts = 0;
 const userStates = {};
 
-// Configuración optimizada para Render
-const MAX_RECONNECT_ATTEMPTS = 5;
-const RECONNECT_DELAYS = [5000, 15000, 30000];
-const INACTIVITY_TIMEOUT = 3 * 60 * 1000; // 3 minutos
-const CLEANUP_INTERVAL = 1 * 60 * 1000; // 1 minuto
+// Configuración
+const MAX_RECONNECT_ATTEMPTS = 10;
+const RECONNECT_DELAYS = [5000, 10000, 15000, 30000, 60000];
+const INACTIVITY_TIMEOUT = 5 * 60 * 1000;
+const CLEANUP_INTERVAL = 2 * 60 * 1000;
 
 // Middleware
 app.use(express.json());
 
-// Auto-ping optimizado para mantener servicio vivo
+// Auto-ping para mantener servicio vivo
 if (process.env.RENDER_EXTERNAL_URL) {
   setInterval(async () => {
     try {
       const response = await fetch(`${process.env.RENDER_EXTERNAL_URL}/health`);
-      // Solo logear errores para reducir logs
-      if (response.status !== 200) {
-        addLog('warning', 'Auto-ping ERROR');
-      }
+      addLog('info', 'Auto-ping: ' + (response.status === 200 ? 'OK' : 'ERROR'));
     } catch (error) {
       addLog('warning', 'Auto-ping error: ' + error.message);
     }
-  }, 240000); // Cada 4 minutos en lugar de 3
+  }, 180000);
 }
 
-// Configuración de base de datos optimizada
+// Configuración de base de datos
 const pool = mysql.createPool({
   host: process.env.DB_HOST || 'cpanel.gymbrocolombia.com',
   user: process.env.DB_USER || 'gymbroco_angie',
   password: process.env.DB_PASSWORD || '24Nov2015',
   database: process.env.DB_NAME || 'gymbroco_whatsappbot',
   waitForConnections: true,
-  connectionLimit: 2, // Reducido para ahorrar memoria
-  acquireTimeout: 60000,
-  timeout: 60000
+  connectionLimit: 5
 });
 
 // Precios y configuraciones por ubicación
@@ -182,7 +174,7 @@ const locationPricing = {
   }
 };
 
-// Función para agregar logs al dashboard (optimizada)
+// Función para agregar logs al dashboard
 function addLog(type, message) {
   const log = {
     timestamp: new Date().toISOString(),
@@ -192,9 +184,8 @@ function addLog(type, message) {
   
   botLogs.unshift(log);
   
-  // Mantener solo 20 logs en memoria para ahorrar RAM
-  if (botLogs.length > 20) {
-    botLogs = botLogs.slice(0, 20);
+  if (botLogs.length > 100) {
+    botLogs = botLogs.slice(0, 100);
   }
   
   console.log(`[${type.toUpperCase()}] ${message}`);
@@ -736,10 +727,10 @@ async function testDatabaseConnection() {
 async function safeSendMessage(client, to, message) {
   try {
     await client.sendMessage(to, message);
-    addLog('success', `✅ Mensaje enviado a ${to.substring(0, 15)}`);
+    addLog('success', `✅ Enviado a ${to.substring(0, 15)}...`);
     return true;
   } catch (error) {
-    addLog('error', `❌ Error enviando a ${to.substring(0, 15)}: ${error.message}`);
+    addLog('error', `❌ Error enviando a ${to}: ${error.message}`);
     return false;
   }
 }
@@ -827,13 +818,16 @@ async function cleanupInactiveUsers(client) {
     const now = Date.now();
     let cleanedUsers = 0;
     
-    // Limpiar usuarios inactivos más agresivamente para ahorrar memoria
+    addLog('info', `Iniciando limpieza de usuarios inactivos... (${Object.keys(userStates).length} usuarios activos)`);
+    
     for (const phone in userStates) {
       const state = userStates[phone];
       const inactiveFor = now - state.lastInteraction;
+      const inactiveMinutes = Math.floor(inactiveFor / (60 * 1000));
+      
+      addLog('info', `Usuario ${phone}: inactivo por ${inactiveMinutes} minutos`);
       
       if (inactiveFor > INACTIVITY_TIMEOUT) {
-        // Intentar guardar en BD pero no bloquear si falla
         try {
           const dbConnected = await testDatabaseConnection();
           if (dbConnected) {
@@ -841,25 +835,36 @@ async function cleanupInactiveUsers(client) {
               'INSERT INTO interacciones (telefono, plan_interesado, ultima_interaccion) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE plan_interesado = ?, ultima_interaccion = ?',
               [phone, state.selectedPlan || null, new Date(state.lastInteraction), state.selectedPlan || null, new Date(state.lastInteraction)]
             );
+            addLog('success', `Estado de ${phone} guardado en BD`);
           }
         } catch (error) {
-          // Silenciar errores de BD para no saturar logs
+          addLog('error', `Error guardando estado: ${error.message}`);
         }
         
-        // Eliminar directamente sin enviar mensaje para ahorrar recursos
+        const sent = await safeSendMessage(client, phone, 
+          '⏳ Finalizamos el chat por inactividad. ¡Gracias por tu interés en GYMBRO! 💪\n\n' +
+          'Escribe cualquier mensaje para iniciar nuevamente.'
+        );
+        
+        if (sent) {
+          addLog('success', `Mensaje de inactividad enviado a ${phone}`);
+        }
+        
         delete userStates[phone];
         cleanedUsers++;
+        addLog('success', `Usuario ${phone} eliminado por inactividad (${inactiveMinutes} minutos)`);
+        
+        await new Promise(resolve => setTimeout(resolve, 1000));
       }
     }
     
     if (cleanedUsers > 0) {
-      addLog('info', `Limpieza: ${cleanedUsers} usuarios eliminados`);
+      addLog('success', `Limpieza completada: ${cleanedUsers} usuarios eliminados por inactividad`);
+    } else {
+      addLog('info', 'Limpieza completada: Todos los usuarios están activos');
     }
     
-    // Forzar garbage collection si está disponible
-    if (global.gc) {
-      global.gc();
-    }
+    addLog('info', `Usuarios activos restantes: ${Object.keys(userStates).length}`);
     
   } catch (error) {
     addLog('error', 'Error en limpieza: ' + error.message);
@@ -901,10 +906,7 @@ function setupMessageHandlers(client) {
       const telefono = message.from;
       const text = message.body.toLowerCase().trim();
       
-      // Solo logear mensajes importantes para ahorrar memoria
-      if (text === 'test' || text === 'hola' || text === 'acepto' || text.includes('contratar')) {
-        addLog('info', `📩 ${telefono.substring(0, 15)}: "${text}"`);
-      }
+      addLog('info', `📩 ${telefono}: "${text}"`);
       
       if (userStates[telefono]?.redirigiendoAsesor) {
         addLog('info', `🚫 Mensaje ignorado (asesor humano): ${telefono}`);
@@ -922,47 +924,14 @@ function setupMessageHandlers(client) {
           waitingForExperience: false,
           redirigiendoAsesor: false
         };
-        addLog('info', `🆕 Nuevo usuario: ${telefono.substring(0, 15)}`);
+        addLog('info', `🆕 Nuevo usuario: ${telefono}`);
       }
       
       userStates[telefono].lastInteraction = Date.now();
       
-      // Mostrar estado actual del usuario para debugging
-      addLog('info', `Estado usuario ${telefono.substring(0, 15)}: términos=${userStates[telefono].acceptedTerms}, sede=${userStates[telefono].selectedLocation}`);
-      
       // Comandos de prueba simples
       if (text === 'test') {
         await safeSendMessage(client, telefono, '🤖 ¡Bot funcionando! 💪');
-        return;
-      }
-      
-      if (text === 'reset' || text === 'reiniciar') {
-        delete userStates[telefono];
-        await safeSendMessage(client, telefono, '🔄 Tu estado ha sido reiniciado. Escribe "hola" para empezar de nuevo.');
-        return;
-      }
-      
-      if (text === 'debug' || text === 'estado') {
-        const estado = userStates[telefono];
-        const debugInfo = `🔍 *DEBUG - Tu estado actual:*\n\n` +
-          `✅ Términos aceptados: ${estado.acceptedTerms}\n` +
-          `🏢 Sede seleccionada: ${estado.selectedLocation || 'Ninguna'}\n` +
-          `💳 Plan seleccionado: ${estado.selectedPlan || 'Ninguno'}\n` +
-          `⏰ Última interacción: ${new Date(estado.lastInteraction).toLocaleString()}\n\n` +
-          `Escribe "reset" para reiniciar tu estado.`;
-        
-        await safeSendMessage(client, telefono, debugInfo);
-        return;
-      }
-      
-      if (text === 'cleanup' || text === 'limpiar') {
-        await cleanupInactiveUsers(client);
-        await safeSendMessage(client, telefono, '🧹 Limpieza de usuarios inactivos ejecutada');
-        return;
-      }
-
-      if (text === 'stats' || text === 'estadisticas') {
-        await safeSendMessage(client, telefono, `📊 Usuarios activos: ${Object.keys(userStates).length}`);
         return;
       }
       
@@ -971,92 +940,8 @@ function setupMessageHandlers(client) {
         await safeSendMessage(client, telefono, '👋 Chat finalizado. Escribe cualquier mensaje para volver a empezar.');
         return;
       }
-      
-      // PASO 1: Aceptación de términos
-      if (!userStates[telefono].acceptedTerms) {
-        addLog('info', `Usuario ${telefono.substring(0, 15)} no ha aceptado términos. Mensaje: "${text}"`);
-        
-        if (text === 'acepto') {
-          userStates[telefono].acceptedTerms = true;
-          addLog('success', `✅ Usuario ${telefono.substring(0, 15)} aceptó términos. Estado actualizado: ${JSON.stringify(userStates[telefono])}`);
-          
-          await safeSendMessage(client, telefono,
-            '🏋️‍♂️ ¡Hola, hablas con GABRIELA tu asistente virtual bienvenido a GYMBRO! 🏋️‍♀️\n\n' +
-            '¿En cuál de nuestras sedes te encuentras interesad@?\n\n' +
-            '📍 Responde con:\n' +
-            '1️⃣ - Sede 20 de Julio \n' +
-            '2️⃣ - Sede Venecia\n\n' +
-            'No olvides seguirnos en nuestras redes sociales https://linktr.ee/GYMBROCOLOMBIA'
-          );
-          return;
-        }
-        
-        // Cualquier mensaje cuando no ha aceptado términos
-        await safeSendMessage(client, telefono,
-          '👋 ¡Hola! Soy el asistente virtual de *GYMBRO* 💪\n\n' +
-          'Para comenzar, necesito que aceptes el tratamiento de tus datos personales según nuestra política de privacidad.\n\n' +
-          '✅ Escribe *"acepto"* para continuar.'
-        );
-        return;
-      }
-      
-      // PASO 2: Selección de sede
-      if (!userStates[telefono].selectedLocation) {
-        addLog('info', `Usuario ${telefono.substring(0, 15)} necesita seleccionar sede. Mensaje: "${text}"`);
-        
-        if (text === '1' || text.includes('julio') || text.includes('20')) {
-          userStates[telefono].selectedLocation = '20 de Julio';
-          addLog('success', `🏢 Usuario ${telefono.substring(0, 15)} seleccionó 20 de Julio`);
-          
-          await safeSendMessage(client, telefono,
-            '📍 *SEDE 20 DE JULIO SELECCIONADA* 📍\n\n' +
-            'Perfecto! Nuestra sede en 20 de Julio está equipada con lo último en tecnología.\n\n' +
-            '🏋️‍♂️ *MENÚ PRINCIPAL* 🏋️‍♀️\n\n' +
-            'Escribe el número de tu opción:\n\n' +
-            '1️⃣ Información sobre nuestro gimnasio\n' +
-            '2️⃣ Membresías y tarifas\n' +
-            '3️⃣ Sedes y horarios\n' +
-            '4️⃣ Horarios clases grupales\n' +
-            '5️⃣ Trabaja con nosotros\n' +
-            '0️⃣ Volver al inicio'
-          );
-          return;
-        } 
-        
-        if (text === '2' || text.includes('venecia')) {
-          userStates[telefono].selectedLocation = 'Venecia';
-          addLog('success', `🏢 Usuario ${telefono.substring(0, 15)} seleccionó Venecia`);
-          
-          await safeSendMessage(client, telefono,
-            '📍 *SEDE VENECIA SELECCIONADA* 📍\n\n' +
-            'Excelente! Nuestra sede en Venecia está diseñada para tu comodidad.\n\n' +
-            '🏋️‍♂️ *MENÚ PRINCIPAL* 🏋️‍♀️\n\n' +
-            'Escribe el número de tu opción:\n\n' +
-            '1️⃣ Información sobre nuestro gimnasio\n' +
-            '2️⃣ Membresías y tarifas\n' +
-            '3️⃣ Sedes y horarios\n' +
-            '4️⃣ Horarios clases grupales\n' +
-            '5️⃣ Trabaja con nosotros\n' +
-            '0️⃣ Volver al inicio'
-          );
-          return;
-        }
-        
-        // Si no seleccionó sede válida
-        addLog('warning', `Usuario ${telefono.substring(0, 15)} envió "${text}" pero no es una opción válida para seleccionar sede`);
-        await safeSendMessage(client, telefono,
-          '📍 Por favor, selecciona una de nuestras sedes:\n\n' +
-          '🔸 Escribe *1* para sede 20 de Julio\n' +
-          '🔸 Escribe *2* para sede Venecia\n\n' +
-          'O escribe "reset" si necesitas empezar de nuevo.'
-        );
-        return;
-      }
-      
-      // A partir de aquí, el usuario ya seleccionó sede
-      const currentLocation = userStates[telefono].selectedLocation;
-      
-      // Manejo de experiencias y seguimiento
+
+      // Manejo de experiencias y seguimiento (del código original)
       if (text === 'sí' || text === 'si') {
         const dbConnected = await testDatabaseConnection();
         if (dbConnected) {
@@ -1101,8 +986,87 @@ function setupMessageHandlers(client) {
         delete userStates[telefono];
         return;
       }
-
-      // PLANES SEDE 20 DE JULIO
+      
+      // PASO 1: Aceptación de términos
+      if (!userStates[telefono].acceptedTerms) {
+        if (text === 'acepto') {
+          userStates[telefono].acceptedTerms = true;
+          addLog('success', `✅ ${telefono} aceptó términos`);
+          await safeSendMessage(client, telefono,
+            '🏋️‍♂️ ¡Hola, hablas con GABRIELA tu asistente virtual bienvenido a GYMBRO! 🏋️‍♀️\n\n' +
+            '¿En cuál de nuestras sedes te encuentras interesad@?\n\n' +
+            '📍 Responde con:\n' +
+            '1️⃣ - Sede 20 de Julio \n' +
+            '2️⃣ - Sede Venecia\n\n' +
+            'No olvides seguirnos en nuestras redes sociales https://linktr.ee/GYMBROCOLOMBIA'
+          );
+          return;
+        }
+        
+        // Cualquier mensaje cuando no ha aceptado términos
+        addLog('info', `❓ ${telefono} necesita aceptar términos`);
+        await safeSendMessage(client, telefono,
+          '👋 ¡Hola! Soy el asistente virtual de *GYMBRO* 💪\n\n' +
+          'Para comenzar, necesito que aceptes el tratamiento de tus datos personales según nuestra política de privacidad.\n\n' +
+          '✅ Escribe *"acepto"* para continuar.'
+        );
+        return;
+      }
+      
+      // PASO 2: Selección de sede
+      if (!userStates[telefono].selectedLocation) {
+        if (text === '1' || text.includes('julio')) {
+          userStates[telefono].selectedLocation = '20 de Julio';
+          addLog('success', `🏢 ${telefono} seleccionó 20 de Julio`);
+          await safeSendMessage(client, telefono,
+            '📍 *SEDE 20 DE JULIO* 📍\n\n' +
+            'Nuestra sede en 20 de Julio está equipada con lo último en tecnología y personal capacitado.\n\n' +
+            '🏋️‍♂️ *MENÚ PRINCIPAL* 🏋️‍♀️\n\n' +
+            'Escribe el número de tu opción:\n\n' +
+            '1️⃣ Información sobre nuestro gimnasio\n' +
+            '2️⃣ Membresías y tarifas\n' +
+            '3️⃣ Sedes y horarios\n' +
+            '4️⃣ Horarios clases grupales\n' +
+            '5️⃣ Trabaja con nosotros\n' +
+            '0️⃣ Volver al inicio\n' +
+            'Escribe en cualquier momento "salir" para finalizar el chat'
+          );
+          return;
+        } 
+        
+        if (text === '2' || text.includes('venecia')) {
+          userStates[telefono].selectedLocation = 'Venecia';
+          addLog('success', `🏢 ${telefono} seleccionó Venecia`);
+          await safeSendMessage(client, telefono,
+            '📍 *SEDE VENECIA* 📍\n\n' +
+            'Nuestra sede en Venecia está diseñada para que puedas entrenar cómodo y seguro.\n\n' +
+            '🏋️‍♂️ *MENÚ PRINCIPAL* 🏋️‍♀️\n\n' +
+            'Escribe el número de tu opción:\n\n' +
+            '1️⃣ Información sobre nuestro gimnasio\n' +
+            '2️⃣ Membresías y tarifas\n' +
+            '3️⃣ Sedes y horarios\n' +
+            '4️⃣ Horarios clases grupales\n' +
+            '5️⃣ Trabaja con nosotros\n' +
+            '0️⃣ Volver al inicio\n' +
+            'Escribe en cualquier momento "salir" para finalizar el chat'
+          );
+          return;
+        }
+        
+        // Si no seleccionó sede válida
+        await safeSendMessage(client, telefono,
+          '📍 Por favor, selecciona una de nuestras sedes para continuar:\n\n' +
+          '1️⃣ - Para sede 20 de Julio \n' +
+          '2️⃣ - Para sede Venecia'
+        );
+        return;
+      }
+      
+      // A partir de aquí, el usuario ya seleccionó sede
+      const currentLocation = userStates[telefono].selectedLocation;
+      addLog('info', `💬 ${telefono} en ${currentLocation}: "${text}"`);
+      
+      // TODOS LOS PLANES - SEDE 20 DE JULIO
       if (text.includes('motivado') && currentLocation === '20 de Julio') {
         userStates[telefono].selectedPlan = 'motivado';
         const pricing = locationPricing[currentLocation].motivado;
@@ -1163,7 +1127,7 @@ function setupMessageHandlers(client) {
         return;
       }
       
-      // PLANES SEDE VENECIA
+      // TODOS LOS PLANES - SEDE VENECIA
       if (text.includes('flash') && currentLocation === 'Venecia') {
         userStates[telefono].selectedPlan = 'flash';
         const pricing = locationPricing[currentLocation].flash;
@@ -1379,8 +1343,8 @@ function setupMessageHandlers(client) {
         }
         return;
       }
-      
-      // OPCIONES DE MENÚ COMPLETAS
+
+      // Otras opciones del menú
       if (text === '3' || text.includes('sede') || text.includes('horario')) {
         await safeSendMessage(client, telefono,
           '📍 *Horarios y Sedes GYMBRO* 🕒\n\n' +
@@ -1417,7 +1381,7 @@ function setupMessageHandlers(client) {
         return;
       }
 
-      // COMANDOS ESPECIALES
+      // Comandos especiales
       if (text.includes('permanencia') || text.includes('atadura') || text.includes('amarrado')) {
         await safeSendMessage(client, telefono,
           '💪 ¡En GYMBRO no tenemos ninguna atadura! Puedes cancelar tu membresía cuando lo desees. Queremos que te quedes porque amas entrenar, no por obligación.\n\n' +
@@ -1442,18 +1406,7 @@ function setupMessageHandlers(client) {
         );
         return;
       }
-
-      // Validación de planes no disponibles en sede incorrecta
-      if (text.includes('motivado') && currentLocation === 'Venecia') {
-        await safeSendMessage(client, telefono, '❓ Esta membresía no está disponible en la sede Venecia.\n\nEscribe "2" para ver los planes disponibles en esta sede.');
-        return;
-      }
-
-      if ((text.includes('flash') || text.includes('class') || text.includes('elite') || text.includes('bro') || text.includes('trimestre') || text.includes('semestre')) && currentLocation === '20 de Julio') {
-        await safeSendMessage(client, telefono, '❓ Este plan no está disponible en la sede 20 de Julio.\n\nEscribe "2" para ver las membresías disponibles.');
-        return;
-      }
-
+      
       // Menú principal
       if (text === 'menu' || text === '0') {
         await safeSendMessage(client, telefono,
@@ -1492,22 +1445,16 @@ function setupMessageHandlers(client) {
       }
       
     } catch (error) {
-      addLog('error', `Error procesando mensaje de ${telefono.substring(0, 15)}: ${error.message}`);
-      addLog('error', `Stack trace: ${error.stack}`);
-      
-      try {
-        await safeSendMessage(client, telefono, '⚠️ Ocurrió un error procesando tu mensaje. Escribe "reset" para reiniciar o "test" para verificar que el bot funciona.');
-      } catch (sendError) {
-        addLog('error', `Error enviando mensaje de error: ${sendError.message}`);
-      }
+      addLog('error', `Error procesando mensaje: ${error.message}`);
+      await safeSendMessage(client, telefono, '⚠️ Ocurrió un error. Intenta escribir "test" para verificar que el bot funciona.');
     }
   });
 }
 
-// Función principal de inicialización optimizada
+// Función principal de inicialización
 async function initializeBot() {
   try {
-    addLog('info', 'Iniciando bot optimizado para Render...');
+    addLog('info', 'Iniciando bot con WhatsApp-Web.js...');
     
     const client = new Client({
       authStrategy: new LocalAuth({
@@ -1522,17 +1469,7 @@ async function initializeBot() {
           '--disable-accelerated-2d-canvas',
           '--no-first-run',
           '--no-zygote',
-          '--disable-gpu',
-          '--disable-web-security',
-          '--disable-features=VizDisplayCompositor',
-          '--disable-extensions',
-          '--disable-default-apps',
-          '--disable-sync',
-          '--disable-background-timer-throttling',
-          '--disable-backgrounding-occluded-windows',
-          '--disable-renderer-backgrounding',
-          '--memory-pressure-off',
-          '--max_old_space_size=256' // Limitar memoria de V8
+          '--disable-gpu'
         ]
       }
     });
@@ -1569,30 +1506,34 @@ async function initializeBot() {
     await testDatabaseConnection();
     setupMessageHandlers(client);
     
-    // Ping menos frecuente para ahorrar recursos
+    // Ping cada minuto
     setInterval(async () => {
       try {
         if (clientReady && globalClient) {
           const state = await globalClient.getState();
           if (state !== 'CONNECTED') {
+            addLog('error', `WhatsApp estado: ${state}, reconectando...`);
             clientReady = false;
             scheduleReconnect();
+          } else {
+            addLog('info', 'WhatsApp OK');
           }
         }
       } catch (error) {
+        addLog('error', 'Error en ping: ' + error.message);
         clientReady = false;
         scheduleReconnect();
       }
-    }, 120000); // Cada 2 minutos
+    }, 60000);
 
-    // Verificar usuarios inactivos menos frecuentemente
+    // Verificar usuarios inactivos cada hora
     setInterval(() => {
       if (clientReady && globalClient) {
         checkInactiveUsers(globalClient);
       }
-    }, 2 * 60 * 60 * 1000); // Cada 2 horas
+    }, 60 * 60 * 1000);
 
-    // Limpiar usuarios inactivos más frecuentemente
+    // Limpiar usuarios inactivos
     setInterval(async () => {
       if (clientReady && globalClient) {
         await cleanupInactiveUsers(globalClient);
@@ -1620,43 +1561,17 @@ process.on('unhandledRejection', async (reason) => {
   await sendAlert(`Promesa rechazada: ${reason}`);
 });
 
-// Monitoreo de memoria optimizado para Render
+// Monitoreo de memoria
 setInterval(() => {
   const used = process.memoryUsage();
-  const heapUsedMB = Math.round(used.heapUsed / 1024 / 1024);
+  addLog('info', `Memoria: ${Math.round(used.heapUsed / 1024 / 1024)}MB / Usuarios: ${Object.keys(userStates).length}`);
   
-  // Solo logear cada 10 minutos para reducir logs
-  if (Date.now() % 600000 < 60000) {
-    addLog('info', `Memoria: ${heapUsedMB}MB / Usuarios: ${Object.keys(userStates).length}`);
-  }
-  
-  // Limpiar usuarios si la memoria está alta (300MB límite para Render free tier)
-  if (heapUsedMB > 250) {
-    addLog('warning', 'Memoria alta, limpiando usuarios...');
-    // Limpiar usuarios inactivos inmediatamente
-    const now = Date.now();
-    let cleaned = 0;
-    for (const phone in userStates) {
-      if (now - userStates[phone].lastInteraction > 60000) { // 1 minuto
-        delete userStates[phone];
-        cleaned++;
-      }
-    }
-    addLog('info', `Limpieza de emergencia: ${cleaned} usuarios eliminados`);
-    
-    // Forzar garbage collection si está disponible
-    if (global.gc) {
-      global.gc();
-    }
-  }
-  
-  // Reiniciar si se excede el límite crítico
-  if (heapUsedMB > 400) {
-    addLog('error', 'Límite de memoria crítico alcanzado, reiniciando...');
-    sendAlert('Reiniciando por límite de memoria crítico');
+  if (used.heapUsed > 1024 * 1024 * 1024) {
+    addLog('error', 'Uso de memoria alto, reiniciando...');
+    sendAlert('Reiniciando por uso alto de memoria');
     process.exit(1);
   }
-}, 30000); // Verificar cada 30 segundos
+}, 300000);
 
 // Iniciar servidor
 app.listen(SERVER_PORT, () => {
